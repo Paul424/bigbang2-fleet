@@ -1,0 +1,16 @@
+---
+# Verwijdert VM's. Altijd met --limit en bevestiging:
+#   ansible-playbook playbooks/vms-destroy.yml --limit dns2 -e confirm=yes
+- name: Infra-VM's verwijderen
+  hosts: infra_vms
+  gather_facts: false
+  vars:
+    vm_state: absent
+  pre_tasks:
+    - name: Bevestiging vereist
+      ansible.builtin.assert:
+        that: confirm | default('no') == 'yes'
+        fail_msg: "Geef -e confirm=yes mee om {{ ansible_play_hosts | join(', ') }} te verwijderen"
+      run_once: true
+  roles:
+    - proxmox_vm

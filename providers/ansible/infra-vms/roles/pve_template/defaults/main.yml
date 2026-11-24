@@ -1,0 +1,12 @@
+---
+pve_template_name: debian-13-cloudinit
+pve_template_image_url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
+pve_template_image_dir: /var/lib/vz/template/import
+pve_template_storage: local-lvm
+pve_template_bridge: "{{ lab_bridge | default('vmbr0') }}"
+# Installeer qemu-guest-agent in de image met virt-customize (libguestfs-tools).
+pve_template_customize: true
+pve_template_packages:
+  - qemu-guest-agent
+# Zet op true om een bestaand template te vervangen (bijv. nieuwe image).
+pve_template_recreate: false

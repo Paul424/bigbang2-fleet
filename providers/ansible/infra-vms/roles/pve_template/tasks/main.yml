@@ -1,0 +1,92 @@
+---
+- name: Bepaal paden
+  ansible.builtin.set_fact:
+    _image_path: "{{ pve_template_image_dir }}/{{ pve_template_image_url | basename }}"
+    _custom_image_path: "{{ pve_template_image_dir }}/{{ pve_template_name }}.qcow2"
+
+- name: Controleer of template-VMID al bestaat
+  ansible.builtin.command: qm status {{ pve_template_vmid }}
+  register: _tpl_status
+  changed_when: false
+  failed_when: false
+
+- name: Verwijder bestaand template (pve_template_recreate=true)
+  ansible.builtin.command: qm destroy {{ pve_template_vmid }} --purge
+  when:
+    - _tpl_status.rc == 0
+    - pve_template_recreate | bool
+  changed_when: true
+
+- name: Template bouwen
+  when: _tpl_status.rc != 0 or pve_template_recreate | bool
+  block:
+    - name: Image-directory aanmaken
+      ansible.builtin.file:
+        path: "{{ pve_template_image_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Cloud image downloaden
+      ansible.builtin.get_url:
+        url: "{{ pve_template_image_url }}"
+        dest: "{{ _image_path }}"
+        mode: "0644"
+        force: "{{ pve_template_recreate | bool }}"
+
+    - name: Werkkopie van de image maken
+      ansible.builtin.copy:
+        src: "{{ _image_path }}"
+        dest: "{{ _custom_image_path }}"
+        remote_src: true
+        mode: "0644"
+
+    - name: libguestfs-tools installeren
+      ansible.builtin.apt:
+        name: libguestfs-tools
+        state: present
+        update_cache: true
+      when: pve_template_customize | bool
+
+    - name: Packages in image installeren (virt-customize)
+      ansible.builtin.command: >-
+        virt-customize -a {{ _custom_image_path }}
+        --install {{ pve_template_packages | join(',') }}
+        --truncate /etc/machine-id
+      when: pve_template_customize | bool
+      changed_when: true
+
+    - name: VM aanmaken
+      ansible.builtin.command: >-
+        qm create {{ pve_template_vmid }}
+        --name {{ pve_template_name }}
+        --ostype l26
+        --cpu host
+        --cores 2
+        --memory 2048
+        --machine q35
+        --bios ovmf
+        --efidisk0 {{ pve_template_storage }}:0,efitype=4m,pre-enrolled-keys=0
+        --scsihw virtio-scsi-single
+        --net0 virtio,bridge={{ pve_template_bridge }}
+        --serial0 socket
+        --vga serial0
+        --agent enabled=1,fstrim_cloned_disks=1
+      changed_when: true
+
+    - name: Disk importeren en cloud-init drive toevoegen
+      ansible.builtin.command: >-
+        qm set {{ pve_template_vmid }}
+        --scsi0 {{ pve_template_storage }}:0,import-from={{ _custom_image_path }},discard=on,ssd=1,iothread=1
+        --ide2 {{ pve_template_storage }}:cloudinit
+        --boot order=scsi0
+      changed_when: true
+
+    - name: Omzetten naar template
+      ansible.builtin.command: qm template {{ pve_template_vmid }}
+      changed_when: true
+
+  always:
+    - name: Werkkopie opruimen
+      ansible.builtin.file:
+        path: "{{ _custom_image_path }}"
+        state: absent

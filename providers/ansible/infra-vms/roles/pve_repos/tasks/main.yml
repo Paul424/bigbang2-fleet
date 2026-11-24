@@ -1,0 +1,49 @@
+---
+- name: Distributie-facts ophalen
+  ansible.builtin.setup:
+    gather_subset: [distribution]
+  when: ansible_facts.distribution_release is not defined
+
+- name: Repo's instellen
+  when: pve_repos_no_subscription | bool
+  block:
+    - name: Enterprise-repo's zoeken
+      ansible.builtin.find:
+        paths: /etc/apt/sources.list.d
+        patterns: ["*.sources", "*.list"]
+        # find matcht per regel vanaf het begin (re.match), dus '.*' ervoor
+        contains: '.*enterprise\.proxmox\.com'
+      register: _enterprise_repos
+
+    # PVE 9+: deb822-formaat, uitzetten met 'Enabled: no'
+    - name: Enterprise-repo's uitzetten (deb822)
+      ansible.builtin.lineinfile:
+        path: "{{ item.path }}"
+        regexp: '^Enabled:'
+        line: "Enabled: no"
+        insertafter: '^Types:'
+      loop: "{{ _enterprise_repos.files | selectattr('path', 'search', '\\.sources$') | list }}"
+      loop_control:
+        label: "{{ item.path }}"
+      notify: apt cache verversen
+
+    # PVE 8: one-line formaat, regels uitcommentariëren
+    - name: Enterprise-repo's uitzetten (.list)
+      ansible.builtin.replace:
+        path: "{{ item.path }}"
+        regexp: '^(deb\s+https://enterprise\.proxmox\.com.*)$'
+        replace: '# \1'
+      loop: "{{ _enterprise_repos.files | selectattr('path', 'search', '\\.list$') | list }}"
+      loop_control:
+        label: "{{ item.path }}"
+      notify: apt cache verversen
+
+    - name: No-subscription repo's toevoegen
+      ansible.builtin.template:
+        src: no-subscription.sources.j2
+        dest: /etc/apt/sources.list.d/pve-no-subscription.sources
+        mode: "0644"
+      notify: apt cache verversen
+
+- name: Handlers nu uitvoeren
+  ansible.builtin.meta: flush_handlers

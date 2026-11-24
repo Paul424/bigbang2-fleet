@@ -1,0 +1,28 @@
+---
+# Verplicht per host: vm_id, vm_node, ansible_host
+vm_name: "{{ inventory_hostname }}"
+vm_template_vmid: "{{ hostvars[vm_node].pve_template_vmid }}"
+vm_template_node: "{{ vm_node }}"
+
+vm_cores: 2
+vm_sockets: 1
+vm_memory: 2048
+vm_disk: scsi0
+vm_disk_size: 20G
+vm_storage: local-lvm
+vm_onboot: true
+vm_tags: []
+
+vm_bridge: "{{ lab_bridge }}"
+vm_vlan: "{{ lab_vlan | default('') }}"
+vm_ip: "{{ ansible_host }}"
+vm_netmask: "{{ lab_netmask }}"
+vm_gateway: "{{ lab_gateway }}"
+vm_nameservers: "{{ lab_nameservers }}"
+vm_searchdomain: "{{ lab_domain }}"
+
+vm_ci_user: ansible
+vm_ssh_public_keys: []
+
+vm_state: started          # started | present | absent
+vm_wait_for_ssh: true

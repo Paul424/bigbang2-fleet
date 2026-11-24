@@ -1,0 +1,106 @@
+---
+- name: Verplichte variabelen controleren
+  ansible.builtin.assert:
+    that:
+      - vm_id is defined
+      - vm_node is defined
+      - ansible_host is defined
+    fail_msg: "Zet vm_id, vm_node en ansible_host in host_vars/{{ inventory_hostname }}.yml"
+
+- name: Proxmox API-taken
+  module_defaults:
+    community.proxmox.proxmox_kvm: &auth
+      api_host: "{{ proxmox_api_host }}"
+      api_user: "{{ proxmox_api_user }}"
+      api_token_id: "{{ proxmox_api_token_id }}"
+      api_token_secret: "{{ proxmox_api_token_secret }}"
+      validate_certs: "{{ proxmox_validate_certs }}"
+    community.proxmox.proxmox_disk: *auth
+  block:
+    - name: Verwijderen
+      when: vm_state == 'absent'
+      delegate_to: localhost
+      block:
+        - name: VM stoppen
+          community.proxmox.proxmox_kvm:
+            node: "{{ vm_node }}"
+            vmid: "{{ vm_id }}"
+            state: stopped
+            force: true
+          failed_when: false
+
+        - name: VM verwijderen
+          community.proxmox.proxmox_kvm:
+            node: "{{ vm_node }}"
+            vmid: "{{ vm_id }}"
+            state: absent
+
+    - name: Aanmaken / bijwerken
+      when: vm_state != 'absent'
+      delegate_to: localhost
+      block:
+        - name: Clone van template {{ vm_template_vmid }}
+          community.proxmox.proxmox_kvm:
+            node: "{{ vm_template_node }}"
+            vmid: "{{ vm_template_vmid }}"
+            clone: template          # willekeurige waarde; bron is vmid
+            # Template staat per node (local-lvm is niet gedeeld), dus geen target nodig.
+            newid: "{{ vm_id }}"
+            name: "{{ vm_name }}"
+            full: true
+            storage: "{{ vm_storage }}"
+            format: unspecified
+            timeout: 600
+          register: _clone
+
+        - name: Hardware en cloud-init configureren
+          community.proxmox.proxmox_kvm:
+            node: "{{ vm_node }}"
+            vmid: "{{ vm_id }}"
+            update: true
+            update_unsafe: true
+            cores: "{{ vm_cores }}"
+            sockets: "{{ vm_sockets }}"
+            memory: "{{ vm_memory }}"
+            onboot: "{{ vm_onboot }}"
+            tags: "{{ vm_tags }}"
+            net:
+              net0: "virtio,bridge={{ vm_bridge }}{{ (',tag=' ~ vm_vlan) if vm_vlan | string | length > 0 else '' }}"
+            ipconfig:
+              ipconfig0: "ip={{ vm_ip }}/{{ vm_netmask }},gw={{ vm_gateway }}"
+            nameservers: "{{ vm_nameservers }}"
+            searchdomains: "{{ vm_searchdomain }}"
+            ciuser: "{{ vm_ci_user }}"
+            sshkeys: "{{ vm_ssh_public_keys | join('\n') }}"
+
+        - name: Disk vergroten naar {{ vm_disk_size }}
+          community.proxmox.proxmox_disk:
+            vmid: "{{ vm_id }}"
+            disk: "{{ vm_disk }}"
+            size: "{{ vm_disk_size }}"
+            state: resized
+
+        - name: VM starten
+          community.proxmox.proxmox_kvm:
+            node: "{{ vm_node }}"
+            vmid: "{{ vm_id }}"
+            state: started
+          when: vm_state == 'started'
+
+    - name: Wachten op SSH
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: 300
+        search_regex: OpenSSH
+      delegate_to: localhost
+      when:
+        - vm_state == 'started'
+        - vm_wait_for_ssh | bool
+
+    - name: Wachten tot cloud-init klaar is
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      when:
+        - vm_state == 'started'
+        - vm_wait_for_ssh | bool

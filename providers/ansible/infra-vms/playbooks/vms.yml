@@ -1,0 +1,10 @@
+---
+# Maakt/werkt infra-VM's bij via de Proxmox-API.
+#   ansible-playbook playbooks/vms.yml
+#   ansible-playbook playbooks/vms.yml --limit dns1
+- name: Infra-VM's provisionen
+  hosts: infra_vms
+  gather_facts: false
+  serial: 1                 # Proxmox lockt bij gelijktijdig clonen van hetzelfde template
+  roles:
+    - proxmox_vm

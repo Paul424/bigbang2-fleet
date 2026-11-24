@@ -1,0 +1,4 @@
+collections/
+.vault-pass
+*.retry
+.venv/

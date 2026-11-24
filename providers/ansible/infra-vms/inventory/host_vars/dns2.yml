@@ -1,0 +1,5 @@
+---
+vm_id: 111
+vm_node: pve2          # bewust een andere node dan dns1
+ansible_host: 192.168.1.54
+vm_tags: [infra, dns]

@@ -1,0 +1,10 @@
+---
+# Bouwt op elke Proxmox-node een cloud-init template (Debian 13).
+#   ansible-playbook playbooks/pve-template.yml
+#   ansible-playbook playbooks/pve-template.yml -e pve_template_recreate=true
+- name: Cloud-init template op Proxmox-nodes
+  hosts: proxmox
+  gather_facts: false
+  roles:
+    - pve_repos
+    - pve_template

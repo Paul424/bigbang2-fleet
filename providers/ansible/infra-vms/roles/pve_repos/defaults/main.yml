@@ -1,0 +1,5 @@
+---
+# Zet de enterprise-repo's uit en de no-subscription repo's aan
+# (voor nodes zonder Proxmox-subscription).
+pve_repos_no_subscription: true
+pve_repos_ceph_release: ceph-squid

@@ -1,0 +1,11 @@
+---
+# Defaults for infra-VM's; override per host in host_vars.
+ansible_user: "{{ vm_ci_user }}"
+vm_cores: 2
+vm_memory: 2048
+vm_disk_size: 20G
+vm_storage: local-lvm
+vm_onboot: true
+vm_tags:
+  - infra
+  - ansible

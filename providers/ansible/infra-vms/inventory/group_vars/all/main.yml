@@ -1,0 +1,25 @@
+---
+# --- Proxmox API ---------------------------------------------------------
+# Maak een token aan: Datacenter > Permissions > API Tokens
+#   user: ansible@p1, token-id: infra  (privilege separation uit, of rechten op het token)
+proxmox_api_host: 192.168.50.170
+proxmox_api_user: ansible@p1
+proxmox_api_token_id: infra
+proxmox_api_token_secret: "{{ vault_proxmox_api_token_secret }}"
+proxmox_validate_certs: false
+
+# --- Netwerk / DNS -------------------------------------------------------
+lab_domain: lab.example.com
+lab_gateway: 192.168.1.1
+lab_netmask: 24
+lab_bridge: vmbr0
+lab_vlan: ""            # bijv. "20" voor tag=20, leeg = geen VLAN
+# Tijdens bootstrap bestaan dns1/dns2 nog niet; daarna omzetten naar hun IP's.
+lab_nameservers:
+  - 1.1.1.1
+  - 9.9.9.9
+
+# --- Cloud-init defaults voor alle VM's ----------------------------------
+vm_ci_user: ansible
+vm_ssh_public_keys:
+  - "{{ lookup('ansible.builtin.file', '~/.ssh/id_ed25519.pub') }}"
