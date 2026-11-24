@@ -1,0 +1,129 @@
+---
+- name: "{{ zone.name }}: zone ophalen"
+  ansible.builtin.uri:
+    url: "{{ pdns_api_url }}/zones/{{ zone.name }}."
+    headers: { X-API-Key: "{{ pdns_api_key }}" }
+    status_code: [200, 404, 422]
+  register: _zone
+
+- name: "{{ zone.name }}: primary-zone aanmaken"
+  ansible.builtin.uri:
+    url: "{{ pdns_api_url }}/zones"
+    method: POST
+    headers: { X-API-Key: "{{ pdns_api_key }}" }
+    body_format: json
+    body:
+      name: "{{ zone.name }}."
+      kind: Master
+      nameservers: "{{ pdns_servers | map('regex_replace', '$', '.' ~ lab_domain ~ '.') | list }}"
+      soa_edit_api: DEFAULT
+    status_code: [201]
+  when: pdns_is_primary and _zone.status != 200
+  changed_when: true
+
+- name: "{{ zone.name }}: secondary-zone aanmaken"
+  ansible.builtin.uri:
+    url: "{{ pdns_api_url }}/zones"
+    method: POST
+    headers: { X-API-Key: "{{ pdns_api_key }}" }
+    body_format: json
+    body:
+      name: "{{ zone.name }}."
+      kind: Slave
+      masters: ["{{ hostvars[pdns_primary].ansible_host }}:{{ pdns_auth_port }}"]
+      nameservers: []
+    status_code: [201]
+  when: not pdns_is_primary and _zone.status != 200
+  changed_when: true
+
+- name: "{{ zone.name }}: secondary direct laten synchroniseren"
+  ansible.builtin.uri:
+    url: "{{ pdns_api_url }}/zones/{{ zone.name }}./axfr-retrieve"
+    method: PUT
+    headers: { X-API-Key: "{{ pdns_api_key }}" }
+  when: not pdns_is_primary and _zone.status != 200
+  changed_when: true
+  failed_when: false
+
+# Records en metadata alleen op de primary; secondaries krijgen ze via AXFR
+- name: "{{ zone.name }}: records en metadata"
+  when: pdns_is_primary
+  block:
+    - name: "{{ zone.name }}: huidige rrsets ophalen"
+      ansible.builtin.uri:
+        url: "{{ pdns_api_url }}/zones/{{ zone.name }}."
+        headers: { X-API-Key: "{{ pdns_api_key }}" }
+      register: _zone_now
+
+    - name: "{{ zone.name }}: gewenste rrsets bepalen"
+      ansible.builtin.set_fact:
+        _desired: "{{ lookup('ansible.builtin.template', 'rrsets.j2') | from_yaml }}"
+
+    # Alleen gedeclareerde rrsets worden vervangen; records van external-dns blijven staan
+    - name: "{{ zone.name }}: rrsets bijwerken"
+      ansible.builtin.uri:
+        url: "{{ pdns_api_url }}/zones/{{ zone.name }}."
+        method: PATCH
+        headers: { X-API-Key: "{{ pdns_api_key }}" }
+        body_format: json
+        body:
+          rrsets:
+            - name: "{{ item.name }}"
+              type: "{{ item.type }}"
+              ttl: "{{ item.ttl | int }}"
+              changetype: REPLACE
+              records: "{{ item.records | map('community.general.dict_kv', 'content') | map('combine', {'disabled': false}) | list }}"
+        status_code: [204]
+      loop: "{{ _desired }}"
+      loop_control:
+        label: "{{ item.name }} {{ item.type }} {{ item.records | join(',') }}"
+      vars:
+        _cur: "{{ _zone_now.json.rrsets | selectattr('name', 'equalto', item.name) | selectattr('type', 'equalto', item.type) | list }}"
+      when: >-
+        (_cur | length == 0)
+        or (_cur[0].ttl | int != item.ttl | int)
+        or ((_cur[0].records | map(attribute='content') | sort | list) != (item.records | sort | list))
+      changed_when: true
+
+    - name: "{{ zone.name }}: huidige metadata ophalen"
+      ansible.builtin.uri:
+        url: "{{ pdns_api_url }}/zones/{{ zone.name }}./metadata"
+        headers: { X-API-Key: "{{ pdns_api_key }}" }
+      register: _meta_now
+
+    - name: "{{ zone.name }}: metadata bijwerken"
+      ansible.builtin.uri:
+        url: "{{ pdns_api_url }}/zones/{{ zone.name }}./metadata/{{ item.key }}"
+        method: PUT
+        headers: { X-API-Key: "{{ pdns_api_key }}" }
+        body_format: json
+        body:
+          kind: "{{ item.key }}"
+          metadata: "{{ item.value }}"
+        status_code: [200]
+      loop: "{{ _meta_desired | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}={{ item.value | join(',') }}"
+      vars:
+        _meta_desired: >-
+          {{ {'SOA-EDIT-DNSUPDATE': ['INCREASE']}
+             | combine({'TSIG-ALLOW-DNSUPDATE': ['external-dns-' ~ zone.tsig_key]} if zone.tsig_key is defined else {})
+             | combine({'ALLOW-DNSUPDATE-FROM': zone.update_from} if zone.update_from is defined else {}) }}
+        _cur: "{{ _meta_now.json | selectattr('kind', 'equalto', item.key) | map(attribute='metadata') | first | default([]) }}"
+      when: (_cur | map('regex_replace', '\.$', '') | sort | list) != (item.value | sort | list)
+      changed_when: true
+
+    # TSIG-ALLOW-AXFR kan niet via /metadata; de API zet het via master_tsig_key_ids
+    - name: "{{ zone.name }}: TSIG-key voor AXFR"
+      ansible.builtin.uri:
+        url: "{{ pdns_api_url }}/zones/{{ zone.name }}."
+        method: PUT
+        headers: { X-API-Key: "{{ pdns_api_key }}" }
+        body_format: json
+        body:
+          master_tsig_key_ids: ["external-dns-{{ zone.tsig_key }}."]
+        status_code: [204]
+      when:
+        - zone.tsig_key is defined
+        - (_zone_now.json.master_tsig_key_ids | default([]) | map('regex_replace', '\\.$', '') | list) != ['external-dns-' ~ zone.tsig_key]
+      changed_when: true

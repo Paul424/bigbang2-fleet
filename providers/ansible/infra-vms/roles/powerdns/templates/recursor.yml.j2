@@ -1,0 +1,31 @@
+# {{ ansible_managed }}
+incoming:
+  listen:
+{% for a in pdns_recursor_listen %}
+    - "{{ a }}"
+{% endfor %}
+  allow_from:
+{% for a in pdns_recursor_allow_from %}
+    - "{{ a }}"
+{% endfor %}
+
+recursor:
+  # Lokale zones naar de authoritative server op dezelfde VM
+  forward_zones:
+    - zone: "{{ lab_domain }}"
+      forwarders: ["127.0.0.1:{{ pdns_auth_port }}"]
+{% if pdns_recursor_forwarders | length > 0 %}
+  forward_zones_recurse:
+    - zone: "."
+      forwarders:
+{% for f in pdns_recursor_forwarders %}
+        - "{{ f }}"
+{% endfor %}
+{% endif %}
+
+dnssec:
+  validation: process
+  # .lab bestaat niet in de root; zonder NTA wordt de lokale zone als bogus gezien
+  negative_trustanchors:
+    - name: "{{ lab_domain }}"
+      reason: local zone

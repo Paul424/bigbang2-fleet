@@ -13,3 +13,9 @@ vault_proxmox_api_token_secret: x' > inventory/group_vars/all/vault.yml
 for p in playbooks/*.yml; do $V/bin/ansible-playbook --syntax-check $p 2>&1 | tail -2; done
 $V/bin/ansible-inventory --host dns2 2>&1 | head -30
 
+
+ansible-playbook providers/ansible/infra-vms/playbooks/vms-destroy.yml --limit step-ca -e confirm=yes
+ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml --limit step-ca
+
+ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml --limit dns
+ansible-playbook providers/ansible/infra-vms/playbooks/dns.yml

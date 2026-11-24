@@ -1,0 +1,111 @@
+---
+# Tekent een nieuwe intermediate op de controller met de offline root-key en
+# rolt hem uit naar de VM. Wordt alleen geladen met step_ca_rotate_intermediate=true.
+
+- name: Root-key en -cert op de controller controleren
+  ansible.builtin.stat:
+    path: "{{ step_ca_fetch_dir }}/{{ item }}"
+  loop: [root_ca.crt, root_ca_key]
+  register: _root_files
+  delegate_to: localhost
+  become: false
+
+- name: Root-bestanden moeten aanwezig zijn
+  ansible.builtin.assert:
+    that: _root_files.results | map(attribute='stat.exists') | min
+    fail_msg: "root_ca.crt en root_ca_key moeten in {{ step_ca_fetch_dir }} staan (herstel ze uit je backup)"
+
+- name: step op de controller zoeken
+  ansible.builtin.shell: command -v step || command -v step-cli
+  register: _local_step
+  changed_when: false
+  delegate_to: localhost
+  become: false
+
+- name: Intermediate tekenen en uitrollen
+  block:
+    - name: Tijdelijke map op de controller
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: step-ca
+      register: _tmp
+      delegate_to: localhost
+      become: false
+
+    - name: Wachtwoordbestanden op de controller
+      ansible.builtin.copy:
+        content: "{{ item.value }}"
+        dest: "{{ _tmp.path }}/{{ item.name }}-password"
+        mode: "0600"
+      loop:
+        - { name: root, value: "{{ step_ca_root_password }}" }
+        - { name: intermediate, value: "{{ step_ca_intermediate_password }}" }
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+      delegate_to: localhost
+      become: false
+
+    - name: Nieuwe intermediate tekenen met de root-key
+      ansible.builtin.command:
+        argv:
+          - "{{ _local_step.stdout }}"
+          - certificate
+          - create
+          - "{{ step_ca_intermediate_name }}"
+          - "{{ _tmp.path }}/intermediate_ca.crt"
+          - "{{ _tmp.path }}/intermediate_ca_key"
+          - --profile=intermediate-ca
+          - "--ca={{ step_ca_fetch_dir }}/root_ca.crt"
+          - "--ca-key={{ step_ca_fetch_dir }}/root_ca_key"
+          - "--ca-password-file={{ _tmp.path }}/root-password"
+          - "--password-file={{ _tmp.path }}/intermediate-password"
+          - "--not-after={{ step_ca_intermediate_validity }}"
+      changed_when: true
+      delegate_to: localhost
+      become: false
+
+    - name: Huidige intermediate bewaren op de VM
+      ansible.builtin.copy:
+        src: "{{ step_ca_path }}/{{ item }}"
+        dest: "{{ step_ca_path }}/{{ item }}.{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        owner: "{{ step_ca_user }}"
+        group: "{{ step_ca_user }}"
+        mode: preserve
+      loop:
+        - certs/intermediate_ca.crt
+        - secrets/intermediate_ca_key
+
+    - name: Nieuwe intermediate naar de VM kopiëren
+      ansible.builtin.copy:
+        src: "{{ _tmp.path }}/{{ item.file }}"
+        dest: "{{ step_ca_path }}/{{ item.dir }}/{{ item.file }}"
+        owner: "{{ step_ca_user }}"
+        group: "{{ step_ca_user }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { file: intermediate_ca.crt, dir: certs, mode: "0644" }
+        - { file: intermediate_ca_key, dir: secrets, mode: "0600" }
+      loop_control:
+        label: "{{ item.dir }}/{{ item.file }}"
+      notify: Restart step-ca
+
+    - name: Keten controleren (intermediate -> root)
+      ansible.builtin.command:
+        argv:
+          - "{{ _step_bin.stdout }}"
+          - certificate
+          - verify
+          - "{{ step_ca_path }}/certs/intermediate_ca.crt"
+          - "--roots={{ step_ca_path }}/certs/root_ca.crt"
+      changed_when: false
+
+  always:
+    - name: Tijdelijke map opruimen
+      ansible.builtin.file:
+        path: "{{ _tmp.path }}"
+        state: absent
+      when: _tmp.path is defined
+      delegate_to: localhost
+      become: false

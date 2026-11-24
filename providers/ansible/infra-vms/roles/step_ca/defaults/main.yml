@@ -1,0 +1,43 @@
+---
+step_ca_name: Bigbangfleet Lab
+step_ca_path: /etc/step-ca            # STEPPATH
+step_ca_user: step
+step_ca_address: ":443"
+step_ca_dns_names:
+  - "ca.{{ lab_domain }}"
+  - "{{ inventory_hostname }}.{{ lab_domain }}"
+  - "{{ ansible_host }}"
+
+# Eerste provisioner (JWK) voor beheer met `step ca certificate` / `step ca provisioner`.
+step_ca_admin_provisioner: "admin@{{ lab_domain }}"
+# ACME-provisioner 'acme' -> https://ca.<domein>/acme/acme/directory
+step_ca_acme: true
+
+# Wachtwoorden (uit ansible-vault):
+# - root: versleutelt de root-key; alleen nodig bij init en om later een nieuwe
+#   intermediate te tekenen. Staat na de init NIET meer op de VM.
+# - intermediate: versleutelt de intermediate-key; staat in password.txt zodat
+#   de service zelf kan starten.
+# - provisioner: versleutelt de key van de admin-provisioner.
+step_ca_root_password: "{{ vault_step_ca_root_password }}"
+step_ca_intermediate_password: "{{ vault_step_ca_intermediate_password }}"
+step_ca_provisioner_password: "{{ vault_step_ca_provisioner_password }}"
+
+# Looptijden van uitgegeven (leaf) certificaten.
+step_ca_claims:
+  minTLSCertDuration: 5m
+  defaultTLSCertDuration: 24h
+  maxTLSCertDuration: 2160h          # 90 dagen
+
+# Root-cert en (versleutelde) root-key worden hierheen gehaald op de controller.
+# Root-cert is publiek (trust-manager / Talos); root-key staat in .gitignore.
+step_ca_fetch_dir: "{{ playbook_dir }}/../files/pki"
+# Root-key na het ophalen van de VM verwijderen (aanbevolen).
+step_ca_remove_root_key: true
+
+# Intermediate vervangen: tekenen op de controller met de offline root-key,
+# daarna uitrollen naar de VM. Alleen expliciet aanzetten:
+#   -e step_ca_rotate_intermediate=true
+step_ca_rotate_intermediate: false
+step_ca_intermediate_name: "{{ step_ca_name }} Intermediate CA"
+step_ca_intermediate_validity: 87600h   # 10 jaar

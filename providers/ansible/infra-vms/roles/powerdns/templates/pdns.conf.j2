@@ -1,0 +1,32 @@
+# {{ ansible_managed }}
+# Geen include-dir: Debian's pdns.d/bind.conf wordt bewust niet geladen
+launch=gsqlite3
+gsqlite3-database={{ pdns_auth_db }}
+
+local-address={{ pdns_auth_listen | join(',') }}
+local-port={{ pdns_auth_port }}
+
+api=yes
+api-key={{ pdns_api_key }}
+webserver=yes
+webserver-address=127.0.0.1
+webserver-port={{ pdns_api_port }}
+webserver-allow-from=127.0.0.1
+
+default-soa-content={{ pdns_primary }}.{{ lab_domain }}. {{ pdns_soa_hostmaster }} 0 10800 3600 604800 3600
+default-ttl={{ pdns_default_ttl }}
+
+dnsupdate=yes
+allow-dnsupdate-from={{ pdns_auth_allow_dnsupdate_from | join(',') }}
+
+{% if pdns_is_primary %}
+primary=yes
+# NS-records wijzen naar :53 (recursor); notify daarom expliciet naar :{{ pdns_auth_port }}
+only-notify=
+also-notify={{ pdns_secondaries | map('extract', hostvars, 'ansible_host') | map('regex_replace', '$', ':' ~ pdns_auth_port) | join(',') }}
+allow-axfr-ips=127.0.0.0/8{% for h in pdns_secondaries %},{{ hostvars[h].ansible_host }}{% endfor %}
+
+{% else %}
+secondary=yes
+allow-axfr-ips=127.0.0.0/8
+{% endif %}

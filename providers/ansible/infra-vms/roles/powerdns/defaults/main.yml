@@ -1,0 +1,47 @@
+---
+# --- Rollen --------------------------------------------------------------
+# Host in de groep 'dns' die primary is; de overige zijn secondaries.
+pdns_group: dns
+pdns_primary: dns1
+pdns_is_primary: "{{ inventory_hostname == pdns_primary }}"
+pdns_servers: "{{ groups[pdns_group] }}"
+pdns_secondaries: "{{ pdns_servers | difference([pdns_primary]) }}"
+
+# --- Authoritative server ------------------------------------------------
+pdns_auth_port: 5300
+pdns_auth_listen: ["{{ ansible_host }}", "127.0.0.1"]
+pdns_auth_db: /var/lib/powerdns/pdns.sqlite3
+pdns_auth_schema: /usr/share/doc/pdns-backend-sqlite3/schema.sqlite3.sql
+pdns_api_port: 8081                       # alleen op 127.0.0.1
+pdns_api_key: "{{ vault_pdns_api_key }}"
+pdns_api_url: "http://127.0.0.1:{{ pdns_api_port }}/api/v1/servers/localhost"
+# Globale ACL voor dynamic updates; per zone komt daar update_from bij.
+pdns_auth_allow_dnsupdate_from: ["127.0.0.0/8"]
+pdns_soa_hostmaster: "hostmaster.{{ lab_domain }}."
+pdns_default_ttl: 300
+
+# --- Recursor ------------------------------------------------------------
+pdns_recursor_listen: ["{{ ansible_host }}", "127.0.0.1"]
+pdns_recursor_allow_from:
+  - 127.0.0.0/8
+  - 192.168.48.0/22
+# Leeg = zelf recursief vanaf de root-servers; anders bv. ['1.1.1.1', '9.9.9.9']
+pdns_recursor_forwarders: []
+
+# --- TSIG ----------------------------------------------------------------
+pdns_tsig_algorithm: hmac-sha256
+# Secrets per key (in vault): { mgmt: "<base64>", ... }
+pdns_tsig_secrets: "{{ vault_dns_tsig_keys | default({}) }}"
+
+# --- Zones ---------------------------------------------------------------
+# Zie group_vars/dns.yml. Per zone:
+#   name:        zone zonder punt aan het eind
+#   tsig_key:    (optioneel) naam van de key in pdns_tsig_secrets; de key heet
+#                in PowerDNS 'external-dns-<tsig_key>' en mag updates + AXFR doen
+#   update_from: (optioneel) CIDR's die dynamic updates mogen sturen
+#   records:     lijst van {name, type, content (str of lijst), ttl?}
+#                name: '@' of relatief t.o.v. de zone
+#                content in PowerDNS-vorm (namen met '.' aan het eind)
+# NS-records, delegaties naar subzones en glue voor de nameservers
+# worden automatisch aangemaakt.
+pdns_zones: []

@@ -3,3 +3,16 @@
 #   cp vault.yml.example vault.yml
 #   ansible-vault encrypt vault.yml
 vault_proxmox_api_token_secret: "00000000-0000-0000-0000-000000000000"
+
+# step-ca (genereer bv. met: openssl rand -base64 32)
+vault_step_ca_root_password: "change-me-root"
+vault_step_ca_intermediate_password: "change-me-intermediate"
+vault_step_ca_provisioner_password: "change-me-provisioner"
+
+# PowerDNS (genereer met: openssl rand -base64 32)
+vault_pdns_api_key: "change-me"
+vault_dns_tsig_keys:
+  mgmt: "base64-secret"
+  dev: "base64-secret"
+  siem: "base64-secret"
+  wrk01: "base64-secret"

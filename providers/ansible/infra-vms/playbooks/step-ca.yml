@@ -1,0 +1,8 @@
+---
+# Installeert en configureert step-ca; maakt bij de eerste run de root- en intermediate-CA.
+#   ansible-playbook providers/ansible/infra-vms/playbooks/step-ca.yml -J
+- name: step-ca
+  hosts: pki
+  become: true
+  roles:
+    - step_ca

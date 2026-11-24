@@ -1,0 +1,29 @@
+{#- Gewenste rrsets voor zone `zone` als YAML-lijst -#}
+{%- set fqdn = zone.name ~ '.' -%}
+{%- set ns = pdns_servers | map('regex_replace', '$', '.' ~ lab_domain ~ '.') | list -%}
+- name: "{{ fqdn }}"
+  type: NS
+  ttl: {{ pdns_default_ttl }}
+  records: {{ ns | to_json }}
+{# Delegaties naar subzones #}
+{% for z in pdns_zones if z.name != zone.name and z.name.endswith('.' ~ zone.name) %}
+- name: "{{ z.name }}."
+  type: NS
+  ttl: {{ pdns_default_ttl }}
+  records: {{ ns | to_json }}
+{% endfor %}
+{# Glue / A-records voor de nameservers in de zone van het lab-domein #}
+{% if zone.name == lab_domain %}
+{% for h in pdns_servers %}
+- name: "{{ h }}.{{ lab_domain }}."
+  type: A
+  ttl: {{ pdns_default_ttl }}
+  records: ["{{ hostvars[h].ansible_host }}"]
+{% endfor %}
+{% endif %}
+{% for r in zone.records | default([]) %}
+- name: "{{ fqdn if r.name == '@' else r.name ~ '.' ~ fqdn }}"
+  type: {{ r.type | upper }}
+  ttl: {{ r.ttl | default(pdns_default_ttl) }}
+  records: {{ ([r.content] if r.content is string else r.content) | to_json }}
+{% endfor %}

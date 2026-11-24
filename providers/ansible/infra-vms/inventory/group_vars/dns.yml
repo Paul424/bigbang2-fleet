@@ -1,0 +1,40 @@
+---
+pdns_primary: dns1
+
+# Zones; zie roles/powerdns/defaults/main.yml voor het formaat en docs/DNS.md.
+# NS-records, delegaties naar de cluster-subzones en de A-records van
+# dns1/dns2 worden automatisch aangemaakt.
+pdns_zones:
+  - name: "{{ lab_domain }}"
+    records:
+      - { name: ca,      type: A, content: 192.168.48.20 }
+      - { name: step-ca, type: A, content: 192.168.48.20 }
+      - { name: p1,      type: A, content: 192.168.50.170 }
+      - { name: p2,      type: A, content: 192.168.50.171 }
+      - { name: p3,      type: A, content: 192.168.50.172 }
+
+  # Cluster-subzones: external-dns schrijft hier met de eigen TSIG-key.
+  # update_from = het /26-blok van het cluster (zie docs/IPAM.md).
+  - name: "mgmt.{{ lab_domain }}"
+    tsig_key: mgmt
+    update_from: [192.168.49.0/26]
+    records:
+      - { name: api, type: A, content: 192.168.49.1 }
+
+  - name: "dev.{{ lab_domain }}"
+    tsig_key: dev
+    update_from: [192.168.49.64/26]
+    records:
+      - { name: api, type: A, content: 192.168.49.65 }
+
+  - name: "siem.{{ lab_domain }}"
+    tsig_key: siem
+    update_from: [192.168.49.128/26]
+    records:
+      - { name: api, type: A, content: 192.168.49.129 }
+
+  - name: "wrk01.{{ lab_domain }}"
+    tsig_key: wrk01
+    update_from: [192.168.49.192/26]
+    records:
+      - { name: api, type: A, content: 192.168.49.193 }

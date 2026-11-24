@@ -1,0 +1,207 @@
+---
+# --- Installatie ---------------------------------------------------------
+- name: Vereisten installeren
+  ansible.builtin.apt:
+    name: [ca-certificates, python3-debian]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Smallstep apt-repo toevoegen
+  ansible.builtin.deb822_repository:
+    name: smallstep
+    types: deb
+    uris: https://packages.smallstep.com/stable/debian
+    suites: debs
+    components: main
+    signed_by: https://packages.smallstep.com/keys/apt/repo-signing-key.gpg
+
+- name: step-cli en step-ca installeren
+  ansible.builtin.apt:
+    name: [step-cli, step-ca]
+    state: present
+    update_cache: true
+
+- name: step-binary bepalen (step of step-cli)
+  ansible.builtin.shell: command -v step || command -v step-cli
+  register: _step_bin
+  changed_when: false
+
+- name: Systeemgebruiker {{ step_ca_user }}
+  ansible.builtin.user:
+    name: "{{ step_ca_user }}"
+    system: true
+    home: "{{ step_ca_path }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: STEPPATH aanmaken
+  ansible.builtin.file:
+    path: "{{ step_ca_path }}"
+    state: directory
+    owner: "{{ step_ca_user }}"
+    group: "{{ step_ca_user }}"
+    mode: "0700"
+
+- name: Wachtwoord intermediate-key (password.txt)
+  ansible.builtin.copy:
+    content: "{{ step_ca_intermediate_password }}"
+    dest: "{{ step_ca_path }}/password.txt"
+    owner: "{{ step_ca_user }}"
+    group: "{{ step_ca_user }}"
+    mode: "0400"
+  no_log: true
+
+# --- PKI initialiseren (eenmalig) ----------------------------------------
+- name: Bestaat de CA al?
+  ansible.builtin.stat:
+    path: "{{ step_ca_path }}/config/ca.json"
+  register: _ca_json
+
+- name: Root- en intermediate-CA aanmaken
+  when: not _ca_json.stat.exists
+  block:
+    - name: Tijdelijke wachtwoordbestanden
+      ansible.builtin.copy:
+        content: "{{ item.value }}"
+        dest: "{{ step_ca_path }}/.{{ item.name }}-password"
+        owner: "{{ step_ca_user }}"
+        group: "{{ step_ca_user }}"
+        mode: "0400"
+      loop:
+        - { name: root, value: "{{ step_ca_root_password }}" }
+        - { name: provisioner, value: "{{ step_ca_provisioner_password }}" }
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: step ca init
+      ansible.builtin.command:
+        argv: >-
+          {{ [_step_bin.stdout, 'ca', 'init',
+              '--deployment-type=standalone',
+              '--name=' ~ step_ca_name,
+              '--address=' ~ step_ca_address,
+              '--provisioner=' ~ step_ca_admin_provisioner,
+              '--password-file=' ~ step_ca_path ~ '/.root-password',
+              '--provisioner-password-file=' ~ step_ca_path ~ '/.provisioner-password']
+             + (step_ca_dns_names | map('regex_replace', '^', '--dns=') | list)
+             + (['--acme'] if step_ca_acme | bool else []) }}
+        creates: "{{ step_ca_path }}/config/ca.json"
+      become_user: "{{ step_ca_user }}"
+      environment:
+        STEPPATH: "{{ step_ca_path }}"
+
+    # step ca init versleutelt root- en intermediate-key met hetzelfde wachtwoord;
+    # geef de intermediate een eigen wachtwoord zodat het root-wachtwoord niet op de VM blijft.
+    - name: Intermediate-key een eigen wachtwoord geven
+      ansible.builtin.command:
+        argv:
+          - "{{ _step_bin.stdout }}"
+          - crypto
+          - change-pass
+          - "{{ step_ca_path }}/secrets/intermediate_ca_key"
+          - "--password-file={{ step_ca_path }}/.root-password"
+          - "--new-password-file={{ step_ca_path }}/password.txt"
+          - --force
+      become_user: "{{ step_ca_user }}"
+      changed_when: true
+
+  always:
+    - name: Tijdelijke wachtwoordbestanden verwijderen
+      ansible.builtin.file:
+        path: "{{ step_ca_path }}/.{{ item }}-password"
+        state: absent
+      loop: [root, provisioner]
+
+# --- Configuratie --------------------------------------------------------
+- name: ca.json inlezen
+  ansible.builtin.slurp:
+    src: "{{ step_ca_path }}/config/ca.json"
+  register: _ca_json_raw
+
+- name: Claims (certificaatlooptijden) instellen
+  ansible.builtin.copy:
+    content: >-
+      {{ _ca
+         | combine({'authority': _ca.authority | combine({'claims': (_ca.authority.claims | default({})) | combine(step_ca_claims)})})
+         | to_nice_json(indent=2) }}
+    dest: "{{ step_ca_path }}/config/ca.json"
+    owner: "{{ step_ca_user }}"
+    group: "{{ step_ca_user }}"
+    mode: "0600"
+  vars:
+    _ca: "{{ _ca_json_raw.content | b64decode | from_json }}"
+  notify: Restart step-ca
+
+- name: systemd-unit
+  ansible.builtin.template:
+    src: step-ca.service.j2
+    dest: /etc/systemd/system/step-ca.service
+    mode: "0644"
+  notify: Restart step-ca
+
+- name: step-ca starten
+  ansible.builtin.systemd_service:
+    name: step-ca
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Intermediate vervangen
+  ansible.builtin.include_tasks: rotate_intermediate.yml
+  when: step_ca_rotate_intermediate | bool
+
+- name: Handlers uitvoeren
+  ansible.builtin.meta: flush_handlers
+
+- name: Health-check
+  ansible.builtin.uri:
+    url: "https://localhost{{ step_ca_address | regex_replace('^.*:', ':') }}/health"
+    validate_certs: false
+  register: _health
+  until: _health.status == 200
+  retries: 10
+  delay: 3
+
+# --- Root-cert en root-key naar de controller ----------------------------
+- name: Root-certificaat ophalen
+  ansible.builtin.fetch:
+    src: "{{ step_ca_path }}/certs/root_ca.crt"
+    dest: "{{ step_ca_fetch_dir }}/root_ca.crt"
+    flat: true
+
+- name: Staat de root-key nog op de VM?
+  ansible.builtin.stat:
+    path: "{{ step_ca_path }}/secrets/root_ca_key"
+  register: _root_key
+
+- name: Root-key (versleuteld) ophalen
+  ansible.builtin.fetch:
+    src: "{{ step_ca_path }}/secrets/root_ca_key"
+    dest: "{{ step_ca_fetch_dir }}/root_ca_key"
+    flat: true
+  when: _root_key.stat.exists
+
+- name: Root-key van de VM verwijderen
+  ansible.builtin.file:
+    path: "{{ step_ca_path }}/secrets/root_ca_key"
+    state: absent
+  when:
+    - _root_key.stat.exists
+    - step_ca_remove_root_key | bool
+
+- name: Root-fingerprint bepalen
+  ansible.builtin.command:
+    argv: ["{{ _step_bin.stdout }}", certificate, fingerprint, "{{ step_ca_path }}/certs/root_ca.crt"]
+  register: _fingerprint
+  changed_when: false
+
+- name: Samenvatting
+  ansible.builtin.debug:
+    msg:
+      - "CA URL:        https://{{ step_ca_dns_names[0] }}{{ step_ca_address | regex_replace('^.*:', ':') | regex_replace('^:443$', '') }}"
+      - "ACME:          https://{{ step_ca_dns_names[0] }}/acme/acme/directory"
+      - "Fingerprint:   {{ _fingerprint.stdout }}"
+      - "Root-cert:     {{ step_ca_fetch_dir }}/root_ca.crt"
+      - "Bootstrap:     step ca bootstrap --ca-url https://{{ ansible_host }} --fingerprint {{ _fingerprint.stdout }}"

@@ -2,3 +2,5 @@ collections/
 .vault-pass
 *.retry
 .venv/
+# Versleutelde root-key van step-ca: bewaar elders (password manager / offline)
+files/pki/root_ca_key

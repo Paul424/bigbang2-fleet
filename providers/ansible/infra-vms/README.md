@@ -14,10 +14,17 @@ roles/
   pve_repos/                 # disables enterprise repos, enables no-subscription repos
   pve_template/              # builds the template with qm on the node (SSH)
   proxmox_vm/                # clone + config + resize + start through the API
+  step_ca/                   # installs step-ca, creates root + intermediate CA
+  powerdns/                  # PowerDNS auth + recursor, zones, TSIG keys
 playbooks/
   pve-template.yml
   vms.yml
   vms-destroy.yml
+  step-ca.yml
+  dns.yml
+files/pki/
+  root_ca.crt                # fetched root certificate (public, commit it)
+  root_ca_key                # fetched encrypted root key (gitignored!)
 ```
 
 Run all commands from the **repository root**. The `ansible.cfg` there points
@@ -92,6 +99,56 @@ vm_cores: 4
 vm_memory: 4096
 vm_disk_size: 40G
 ```
+
+## step-ca
+
+```sh
+ansible-playbook providers/ansible/infra-vms/playbooks/step-ca.yml -J
+```
+
+Add three passwords to the vault first (`ansible-vault edit .../vault.yml`):
+`vault_step_ca_root_password`, `vault_step_ca_intermediate_password` and
+`vault_step_ca_provisioner_password` (see `vault.yml.example`).
+
+On the first run the role:
+
+1. installs `step-cli` and `step-ca` from the Smallstep apt repo;
+2. runs `step ca init` (standalone, name `Bigbangfleet Lab`, SANs
+   `ca.bigbangfleet.lab`, `step-ca.bigbangfleet.lab` and the VM IP, listening on
+   `:443`), with a JWK provisioner `admin@bigbangfleet.lab` and an ACME
+   provisioner `acme`;
+3. re-encrypts the intermediate key with its own password, so the root
+   password never stays on the VM;
+4. sets leaf certificate lifetimes (default 24h, max 90 days) and installs a
+   hardened systemd unit;
+5. fetches `root_ca.crt` and the encrypted `root_ca_key` to `files/pki/`,
+   then **removes the root key from the VM** (`step_ca_remove_root_key`).
+
+Later runs leave the existing PKI alone; they only update the config and unit.
+
+To replace the intermediate, run the playbook with
+`-e step_ca_rotate_intermediate=true`. See [docs/CA.md](../../../docs/CA.md).
+
+> **Back up `files/pki/root_ca_key` and the root password**, for example in a
+> password manager. Both are needed to sign a new intermediate. The file is
+> gitignored and exists only on the machine that ran the playbook.
+
+Endpoints:
+- ACME directory: `https://ca.bigbangfleet.lab/acme/acme/directory`
+- Client bootstrap: `step ca bootstrap --ca-url https://192.168.48.20 --fingerprint <fp>`
+  (the playbook prints the fingerprint)
+
+## DNS
+
+```sh
+ansible-playbook providers/ansible/infra-vms/playbooks/dns.yml
+```
+
+Installs PowerDNS Authoritative (`:5300`) and Recursor (`:53`) on dns1/dns2,
+with dns1 as primary and dns2 as secondary. Creates the zones from
+`inventory/group_vars/dns.yml` and a TSIG key per cluster subzone. Add
+`vault_pdns_api_key` and `vault_dns_tsig_keys` to the vault first. See
+[docs/DNS.md](../../../docs/DNS.md).
 
 ## Design choices
 

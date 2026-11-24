@@ -1,0 +1,125 @@
+---
+- name: Packages installeren
+  ansible.builtin.apt:
+    name: [pdns-server, pdns-backend-sqlite3, pdns-recursor, sqlite3, bind9-dnsutils]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Recursor-versie controleren (YAML-config vereist >= 5)
+  ansible.builtin.command: dpkg-query -W -f=${Version} pdns-recursor
+  register: _rec_version
+  changed_when: false
+  failed_when: _rec_version.stdout is version('5', '<')
+
+# Binden aan het VM-IP ook als het netwerk nog niet up is tijdens boot
+- name: Non-local bind toestaan
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-pdns.conf
+    content: |
+      net.ipv4.ip_nonlocal_bind = 1
+      net.ipv6.ip_nonlocal_bind = 1
+    mode: "0644"
+  register: _sysctl
+
+- name: sysctl toepassen
+  ansible.builtin.command: sysctl --system
+  when: _sysctl is changed
+  changed_when: true
+
+# --- Authoritative -------------------------------------------------------
+- name: Schema van de sqlite-backend zoeken
+  ansible.builtin.stat:
+    path: "{{ pdns_auth_schema }}"
+  register: _schema
+
+- name: Schema moet bestaan
+  ansible.builtin.assert:
+    that: _schema.stat.exists
+    fail_msg: "Schema niet gevonden op {{ pdns_auth_schema }}; zoek met: dpkg -L pdns-backend-sqlite3 | grep sql"
+
+- name: Database aanmaken
+  ansible.builtin.shell: >-
+    sqlite3 {{ pdns_auth_db }} < {{ pdns_auth_schema }}
+  args:
+    creates: "{{ pdns_auth_db }}"
+
+- name: Database-rechten
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    owner: pdns
+    group: pdns
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ pdns_auth_db | dirname }}", mode: "0750" }
+    - { path: "{{ pdns_auth_db }}", mode: "0640" }
+
+- name: pdns.conf
+  ansible.builtin.template:
+    src: pdns.conf.j2
+    dest: /etc/powerdns/pdns.conf
+    owner: root
+    group: pdns
+    mode: "0640"
+  notify: Restart pdns
+
+# --- Recursor ------------------------------------------------------------
+- name: recursor.yml
+  ansible.builtin.template:
+    src: recursor.yml.j2
+    dest: /etc/powerdns/recursor.yml
+    owner: root
+    group: pdns
+    mode: "0640"
+  notify: Restart pdns-recursor
+
+# recursor.yml wordt gebruikt zodra hij bestaat; oude .conf opzij zetten voorkomt verwarring
+- name: Oude recursor.conf opzij zetten
+  ansible.builtin.command: mv /etc/powerdns/recursor.conf /etc/powerdns/recursor.conf.dist
+  args:
+    removes: /etc/powerdns/recursor.conf
+  notify: Restart pdns-recursor
+
+- name: Services aanzetten
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [pdns, pdns-recursor]
+
+- name: Handlers uitvoeren
+  ansible.builtin.meta: flush_handlers
+
+- name: Wachten op de API
+  ansible.builtin.uri:
+    url: "{{ pdns_api_url }}"
+    headers: { X-API-Key: "{{ pdns_api_key }}" }
+  register: _api
+  until: _api.status == 200
+  retries: 10
+  delay: 2
+  no_log: true
+
+# --- TSIG-keys (op alle servers) -----------------------------------------
+- name: TSIG-keys
+  ansible.builtin.include_tasks: tsig.yml
+  loop: "{{ pdns_zones | selectattr('tsig_key', 'defined') | map(attribute='tsig_key') | unique | list }}"
+  loop_control:
+    loop_var: tsig_key
+
+# --- Zones ---------------------------------------------------------------
+- name: Zones
+  ansible.builtin.include_tasks: zone.yml
+  loop: "{{ pdns_zones }}"
+  loop_control:
+    loop_var: zone
+    label: "{{ zone.name }}"
+
+- name: Lokale zone via recursor testen
+  ansible.builtin.command: dig +short @127.0.0.1 {{ pdns_primary }}.{{ lab_domain }} A
+  register: _dig
+  changed_when: false
+  failed_when: _dig.stdout | length == 0
+  retries: 5
+  delay: 3
+  until: _dig.stdout | length > 0

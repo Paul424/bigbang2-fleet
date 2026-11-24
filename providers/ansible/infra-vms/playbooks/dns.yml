@@ -1,0 +1,10 @@
+---
+# PowerDNS auth + recursor op de dns-VM's; primary eerst, dan secondaries.
+#   ansible-playbook providers/ansible/infra-vms/playbooks/dns.yml
+- name: PowerDNS
+  hosts: dns
+  become: true
+  order: sorted
+  serial: 1
+  roles:
+    - powerdns

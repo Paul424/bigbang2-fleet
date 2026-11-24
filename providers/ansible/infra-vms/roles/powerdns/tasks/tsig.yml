@@ -1,0 +1,44 @@
+---
+- name: "TSIG {{ tsig_key }}: secret moet in vault staan"
+  ansible.builtin.assert:
+    that: tsig_key in pdns_tsig_secrets
+    fail_msg: "Voeg vault_dns_tsig_keys.{{ tsig_key }} toe aan de vault (openssl rand -base64 32)"
+
+- name: "TSIG {{ tsig_key }}: huidige key ophalen"
+  ansible.builtin.uri:
+    url: "{{ pdns_api_url }}/tsigkeys/external-dns-{{ tsig_key }}."
+    headers: { X-API-Key: "{{ pdns_api_key }}" }
+    status_code: [200, 404, 422]
+  register: _tsig
+  no_log: true
+
+- name: "TSIG {{ tsig_key }}: aanmaken"
+  ansible.builtin.uri:
+    url: "{{ pdns_api_url }}/tsigkeys"
+    method: POST
+    headers: { X-API-Key: "{{ pdns_api_key }}" }
+    body_format: json
+    body:
+      name: "external-dns-{{ tsig_key }}"
+      algorithm: "{{ pdns_tsig_algorithm }}"
+      key: "{{ pdns_tsig_secrets[tsig_key] }}"
+    status_code: [201]
+  when: _tsig.status != 200
+  changed_when: true
+  no_log: true
+
+- name: "TSIG {{ tsig_key }}: bijwerken"
+  ansible.builtin.uri:
+    url: "{{ pdns_api_url }}/tsigkeys/external-dns-{{ tsig_key }}."
+    method: PUT
+    headers: { X-API-Key: "{{ pdns_api_key }}" }
+    body_format: json
+    body:
+      algorithm: "{{ pdns_tsig_algorithm }}"
+      key: "{{ pdns_tsig_secrets[tsig_key] }}"
+    status_code: [200]
+  when:
+    - _tsig.status == 200
+    - _tsig.json.key != pdns_tsig_secrets[tsig_key] or _tsig.json.algorithm | regex_replace('\.$', '') != pdns_tsig_algorithm
+  changed_when: true
+  no_log: true
