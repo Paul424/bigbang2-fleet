@@ -1,5 +1,5 @@
 ---
-vm_id: 110
-vm_node: pve1
-ansible_host: 192.168.1.53
+vm_id: 302
+vm_node: p1
+ansible_host: 192.168.48.10
 vm_tags: [infra, dns]

@@ -1,5 +1,5 @@
 ---
 vm_id: 301
 vm_node: p1
-ansible_host: 192.168.1.60
+ansible_host: 192.168.48.20
 vm_tags: [infra, pki]

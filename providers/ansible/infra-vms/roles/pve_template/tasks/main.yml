@@ -64,19 +64,17 @@
         --cores 2
         --memory 2048
         --machine q35
-        --bios ovmf
-        --efidisk0 {{ pve_template_storage }}:0,efitype=4m,pre-enrolled-keys=0
-        --scsihw virtio-scsi-single
+        --bios seabios
+        --scsihw virtio-scsi-pci
         --net0 virtio,bridge={{ pve_template_bridge }}
         --serial0 socket
-        --vga serial0
         --agent enabled=1,fstrim_cloned_disks=1
       changed_when: true
 
     - name: Disk importeren en cloud-init drive toevoegen
       ansible.builtin.command: >-
         qm set {{ pve_template_vmid }}
-        --scsi0 {{ pve_template_storage }}:0,import-from={{ _custom_image_path }},discard=on,ssd=1,iothread=1
+        --scsi0 {{ pve_template_storage }}:0,import-from={{ _custom_image_path }},discard=on,ssd=1
         --ide2 {{ pve_template_storage }}:cloudinit
         --boot order=scsi0
       changed_when: true

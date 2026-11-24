@@ -1,25 +1,26 @@
 # infra-vms
 
-Ansible setup to manage KVM-VM's on Proxmox as clone of a cloud-init
-template. Meant to host DNS and Step-ca.
+Ansible setup to manage KVM VMs on Proxmox as clones of a cloud-init
+template. Meant to host DNS and step-ca. For addresses, see [docs/IPAM.md](../../../docs/IPAM.md).
 
 ```
 inventory/
-  hosts.yml                  # proxmox-nodes + infra_vms
-  group_vars/all/main.yml    # API, netwerk, cloud-init defaults
-  group_vars/all/vault.yml   # (zelf aanmaken) versleutelde secrets
-  group_vars/infra_vms.yml   # default VM-sizing
+  hosts.yml                  # proxmox nodes + infra_vms
+  group_vars/all/main.yml    # API, network, cloud-init defaults
+  group_vars/all/vault.yml   # (create yourself) encrypted secrets
+  group_vars/infra_vms.yml   # default VM sizing
   host_vars/<vm>.yml         # vm_id, vm_node, ansible_host (+ overrides)
 roles/
-  pve_template/              # bouwt template via qm op de node (SSH)
-  proxmox_vm/                # clone + config + resize + start via API
+  pve_repos/                 # disables enterprise repos, enables no-subscription repos
+  pve_template/              # builds the template with qm on the node (SSH)
+  proxmox_vm/                # clone + config + resize + start through the API
 playbooks/
   pve-template.yml
   vms.yml
   vms-destroy.yml
 ```
 
-All commands are run from the **repository root**, where `ansible.cfg` points
+Run all commands from the **repository root**. The `ansible.cfg` there points
 to the inventory, roles and collections in this directory.
 
 ## Prerequisites
@@ -29,76 +30,82 @@ to the inventory, roles and collections in this directory.
    conda create -n ansible python=3.15
    conda activate ansible
    pip install -r ./providers/ansible/infra-vms/requirements.txt
-   ansible-galaxy collection install -r ./providers/ansible/infra-vms/requirements.yml 
+   ansible-galaxy collection install -r ./providers/ansible/infra-vms/requirements.yml
    ```
 
-2. **API-token op Proxmox**
-   Run on ny proxmox node (shell) as root
+2. **API token on Proxmox**
+   Run on any Proxmox node (shell) as root:
    ```sh
    pveum user add ansible@pve
    pveum role add Provisioner -privs "VM.Allocate VM.Clone VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit VM.Config.Disk VM.Config.HWType VM.Config.Memory VM.Config.Network VM.Config.Options VM.Audit VM.PowerMgmt Datastore.AllocateSpace Datastore.Audit SDN.Use Sys.Audit"
    pveum aclmod / -user ansible@pve -role Provisioner
    pveum user token add ansible@pve infra --privsep 0
    ```
-   
-   Store the token in an Ansible vault
+
+   Store the token in an Ansible vault:
    ```sh
    cd providers/ansible/infra-vms/inventory/group_vars/all
    cp vault.yml.example vault.yml && $EDITOR vault.yml
    ansible-vault encrypt vault.yml
    ```
 
-3. **SSH as root to Proxmox-nodes**
+   Ansible needs the vault password on every run. Pass `--ask-vault-pass`
+   (`-J`), or set `vault_password_file` in `ansible.cfg`.
+
+3. **SSH as root to the Proxmox nodes**
    ```sh
    ssh-keygen -t ed25519 -a 100 -C "pbox@P17"
    ssh-copy-id root@192.168.50.170
    ```
 
-4. **Edit inventory**
+4. **Edit the inventory**
 
-    1. IP's o/t nodes
+    1. IPs of the nodes
     2. `pve_template_vmid` per node
     3. `lab_domain`
     4. gateway
     5. bridge/VLAN
-    6. per VM `vm_id`/`vm_node`/`ansible_host`.
+    6. per VM: `vm_id`/`vm_node`/`ansible_host`
 
 ## Build
 
 ```sh
-# 1. Template bouwen op elke node (idempotent; slaat over als VMID al bestaat)
-ansible-playbook providers/ansible/infra-vms/playbooks/pve-template.yml
+# 1. Build the template on every node (idempotent; skipped if the VMID already exists)
+ansible-playbook providers/ansible/infra-vms/playbooks/pve-template.yml -J
 
-# 2. VM's aanmaken / bijwerken
-ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml --ask-vault-pass
-ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml --limit dns1 --ask-vault-pass
+# 2. Create / update VMs
+ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml -J
+ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml --limit dns1 -J
 
-# Verwijderen
-ansible-playbook providers/ansible/infra-vms/playbooks/vms-destroy.yml --limit dns2 -e confirm=yes --ask-vault-pass
+# Remove
+ansible-playbook providers/ansible/infra-vms/playbooks/vms-destroy.yml --limit dns2 -e confirm=yes -J
 ```
 
-Nieuwe VM toevoegen: host in `inventory/hosts.yml` onder een groep in
-`infra_vms`, plus `inventory/host_vars/<naam>.yml`:
+To add a VM, put the host in `inventory/hosts.yml` under a group in
+`infra_vms`, and add `inventory/host_vars/<name>.yml`:
 
 ```yaml
 vm_id: 130
-vm_node: pve2
-ansible_host: 192.168.1.70
+vm_node: p2
+ansible_host: 192.168.48.30
 vm_cores: 4
 vm_memory: 4096
 vm_disk_size: 40G
 ```
 
-## Ontwerpkeuzes
+## Design choices
 
-- **Template per node**: `local-lvm` is niet gedeeld, dus clonen naar een
-  andere node kan niet. Elke node krijgt een eigen template-VMID
-  (`pve_template_vmid`) en VM's worden gecloned van het template op hun
-  eigen `vm_node`. Met gedeelde storage (Ceph/NFS) kan één template volstaan.
-- **Debian 13 genericcloud** met `qemu-guest-agent` erin gebakken via
-  `virt-customize`; UEFI (OVMF) + q35, serial console.
-- **Statische IP's via cloud-init** (`ipconfig0`). Tijdens bootstrap wijzen
-  `lab_nameservers` naar publieke resolvers; zet ze na het uitrollen van
-  dns1/dns2 om naar hun IP's.
-- Wijzigingen aan hardware (cores/memory) worden via `update: true`
-  toegepast; sommige vereisen een herstart van de VM.
+- **One template per node**: `local-lvm` isn't shared, so you can't clone to
+  another node. Each node gets its own template VMID (`pve_template_vmid`), and
+  VMs are cloned from the template on their own `vm_node`. With shared storage
+  (Ceph/NFS), one template would be enough.
+- **No-subscription repos**: `pve_repos` disables the enterprise repos, which
+  return 401 without a subscription, and adds the no-subscription repos. Set
+  `pve_repos_no_subscription: false` to leave the repos alone.
+- **Debian 13 genericcloud** with `qemu-guest-agent` baked in through
+  `virt-customize`; SeaBIOS + q35, VirtIO SCSI, default display (serial port kept for `qm terminal`).
+- **Static IPs through cloud-init** (`ipconfig0`). During bootstrap,
+  `lab_nameservers` points to public resolvers. Switch it to the dns1/dns2 IPs
+  once they're deployed.
+- Hardware changes (cores/memory) are applied through `update: true`. Some
+  of them need a VM restart.

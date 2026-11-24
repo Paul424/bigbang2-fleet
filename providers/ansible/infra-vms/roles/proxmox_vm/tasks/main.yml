@@ -65,7 +65,7 @@
             onboot: "{{ vm_onboot }}"
             tags: "{{ vm_tags }}"
             net:
-              net0: "virtio,bridge={{ vm_bridge }}{{ (',tag=' ~ vm_vlan) if vm_vlan | string | length > 0 else '' }}"
+              net0: "virtio={{ vm_mac }},bridge={{ vm_bridge }}{{ (',tag=' ~ vm_vlan) if vm_vlan | string | length > 0 else '' }}"
             ipconfig:
               ipconfig0: "ip={{ vm_ip }}/{{ vm_netmask }},gw={{ vm_gateway }}"
             nameservers: "{{ vm_nameservers }}"
@@ -98,9 +98,19 @@
         - vm_state == 'started'
         - vm_wait_for_ssh | bool
 
+    # rc 0 = ok, rc 1 = fout, rc 2 = klaar met recoverable errors/warnings
     - name: Wachten tot cloud-init klaar is
-      ansible.builtin.command: cloud-init status --wait
+      ansible.builtin.command: cloud-init status --wait --long
+      register: _cloud_init
       changed_when: false
+      failed_when: _cloud_init.rc not in [0, 2]
       when:
         - vm_state == 'started'
         - vm_wait_for_ssh | bool
+
+    - name: cloud-init waarschuwingen
+      ansible.builtin.debug:
+        msg: "{{ _cloud_init.stdout_lines }}"
+      when:
+        - _cloud_init is not skipped
+        - _cloud_init.rc == 2

@@ -15,6 +15,14 @@ vm_tags: []
 
 vm_bridge: "{{ lab_bridge }}"
 vm_vlan: "{{ lab_vlan | default('') }}"
+# Vast MAC-adres, afgeleid van vm_id (BC:24:11 = Proxmox-prefix). Zonder vast MAC
+# genereert Proxmox bij elke update van net0 een nieuw MAC en raakt de VM zijn
+# cloud-init netwerkconfig (die op MAC matcht) kwijt.
+vm_mac: >-
+  {{ 'BC:24:11:%02X:%02X:%02X' | format(
+       (vm_id | int // 65536) % 256,
+       (vm_id | int // 256) % 256,
+       vm_id | int % 256) }}
 vm_ip: "{{ ansible_host }}"
 vm_netmask: "{{ lab_netmask }}"
 vm_gateway: "{{ lab_gateway }}"

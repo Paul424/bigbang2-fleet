@@ -2,36 +2,37 @@
 
 ## Objectives
 
-Homelab op Proxmox (HP-machines) met 4 Talos-clusters en centraal policy-beheer.
+Homelab on Proxmox (HP machines) with 4 Talos clusters and central policy management.
 
-## Clusters (subzone per cluster onder lab.<domein>)
-- mgmt  – Keycloak (IdP), Kyverno-policies, Flux hub (fleet management)
-- dev   – GitLab, Harbor (migratie vanaf minikube; Harbor ook mirror voor registry1.dso.mil)
-- siem  – Wazuh of OpenSearch; ontvangt Talos- en kube-apiserver-audit logs
-- wrk01 – Big Bang stack (draait zelf op Flux, eigen Kyverno-policies afstemmen)
+## Clusters (one subzone per cluster under `bigbangfleet.lab`)
+- mgmt  – Keycloak (IdP), Kyverno policies, Flux hub (fleet management)
+- dev   – GitLab, Harbor (migrated from minikube; Harbor also mirrors registry1.dso.mil)
+- siem  – Wazuh or OpenSearch; receives Talos and kube-apiserver audit logs
+- wrk01 – Big Bang stack (runs on Flux itself; align its own Kyverno policies)
 
-## Beslissingen
-- Clusters worden NIET via Cluster API aangemaakt.
-- Twee lagen: Ansible buiten k8s, Flux binnen k8s.
-- Ansible (repo homelab-infra): community.proxmox voor VM's (clone van cloud-init template),
-  rollen base, powerdns, step-ca, talos-cluster. Secrets in ansible-vault.
-- Infra-VM's buiten de clusters: dns1/dns2 (PowerDNS auth + recursor, op verschillende
-  Proxmox-nodes) en step-ca (ACME, root via trust-manager en Talos TrustedRootsConfig).
-- DNS: eigen subzone per cluster, external-dns (rfc2136) met TSIG-key per zone.
-  Talos nameservers -> recursors. Geen /etc/hosts of hostAliases.
+## Decisions
+- Clusters are NOT created with Cluster API.
+- Two layers: Ansible outside k8s, Flux inside k8s.
+- Ansible (repo homelab-infra): community.proxmox for VMs (clone of a cloud-init template),
+  roles base, powerdns, step-ca, talos-cluster. Secrets in ansible-vault.
+- Infra VMs outside the clusters: dns1/dns2 (PowerDNS auth + recursor, on different
+  Proxmox nodes) and step-ca (ACME, root distributed via trust-manager and Talos TrustedRootsConfig).
+- DNS: domain `bigbangfleet.lab`, a subzone per cluster (e.g. `api.mgmt.bigbangfleet.lab`),
+  external-dns (rfc2136) with a TSIG key per zone.
+  Talos nameservers -> recursors. No /etc/hosts or hostAliases.
+- IP plan: see [docs/IPAM.md](docs/IPAM.md). Flat `192.168.48.0/22` LAN, no MAC reservations.
 - Flux (repo system-manifests): base/ + components/ + clusters/{mgmt,dev,siem,wrk01}.
-  Mgmt rolt uit naar de andere clusters via Kustomization spec.kubeConfig.secretRef.
-  Secrets met SOPS + age.
-- system-manifests op GitHub (niet alleen in de eigen GitLab, om niet af te hangen van het dev-cluster).
+  Mgmt rolls out to the other clusters via Kustomization spec.kubeConfig.secretRef.
+  Secrets with SOPS + age.
+- system-manifests on GitHub, not only in our own GitLab, so it doesn't depend on the dev cluster.
 
-## Volgorde
-1. Proxmox-template + infra-VM's (DNS, step-ca)
-2. mgmt-cluster + Flux bootstrap + Keycloak
+## Order
+1. Proxmox template + infra VMs (DNS, step-ca)
+2. mgmt cluster + Flux bootstrap + Keycloak
 3. dev (GitLab/Harbor) -> 4. siem -> 5. wrk01 (Big Bang)
 
 ## Open
-- Aantal HP-nodes, RAM/cores -> VM-verdeling en IP-plan
-- Domeinnaam en IP-ranges (LB-pools per cluster)
+- Number of HP nodes, RAM/cores -> VM distribution
 
 ## Prerequisites
 
@@ -42,6 +43,3 @@ Homelab op Proxmox (HP-machines) met 4 Talos-clusters en centraal policy-beheer.
 5. [kubelogin plugin](https://github.com/int128/kubelogin/releases)
 6. [flux](https://fluxcd.io/flux/installation/)
 7. [sops](https://getsops.io/docs/installation/)
-
-
-
