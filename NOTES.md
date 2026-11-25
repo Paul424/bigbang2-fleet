@@ -13,9 +13,15 @@ vault_proxmox_api_token_secret: x' > inventory/group_vars/all/vault.yml
 for p in playbooks/*.yml; do $V/bin/ansible-playbook --syntax-check $p 2>&1 | tail -2; done
 $V/bin/ansible-inventory --host dns2 2>&1 | head -30
 
+pip install -r /home/pbox/projects/bigbang2-fleet/providers/ansible/infra-vms/requirements.txt
+ansible-galaxy collection install -r /home/pbox/projects/bigbang2-fleet/providers/ansible/infra-vms/requirements.yml 
 
 ansible-playbook providers/ansible/infra-vms/playbooks/vms-destroy.yml --limit step-ca -e confirm=yes
 ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml --limit step-ca
 
 ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml --limit dns
 ansible-playbook providers/ansible/infra-vms/playbooks/dns.yml
+
+ansible-playbook providers/ansible/infra-vms/playbooks/talos-cluster.yml -e talos_cluster=mgmt
+export TALOSCONFIG=$PWD/providers/ansible/infra-vms/files/talos/mgmt/talosconfig
+export KUBECONFIG=$PWD/providers/ansible/infra-vms/files/talos/mgmt/kubeconfig

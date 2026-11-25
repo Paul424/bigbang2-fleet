@@ -4,6 +4,11 @@ vm_name: "{{ inventory_hostname }}"
 vm_template_vmid: "{{ hostvars[vm_node].pve_template_vmid }}"
 vm_template_node: "{{ vm_node }}"
 
+# Bron: leeg = clone van het cloud-init template; anders een ISO om van te
+# booten (bv. Talos), dan wordt een lege VM met disk + cloud-init drive gemaakt.
+vm_iso: ""
+vm_cpu: x86-64-v3          # alleen bij vm_iso; clones erven 'host' van het template
+
 vm_cores: 2
 vm_sockets: 1
 vm_memory: 2048
@@ -11,6 +16,9 @@ vm_disk: scsi0
 vm_disk_size: 20G
 vm_storage: local-lvm
 vm_onboot: true
+# Extra disks, bv. ruwe disks voor Ceph-OSD's:
+#   - { disk: scsi1, storage: data, size: 400 }   # size in GB
+vm_extra_disks: []
 vm_tags: []
 
 vm_bridge: "{{ lab_bridge }}"
@@ -33,4 +41,7 @@ vm_ci_user: ansible
 vm_ssh_public_keys: []
 
 vm_state: started          # started | present | absent
-vm_wait_for_ssh: true
+vm_wait_for_ssh: true      # wachten tot vm_wait_port open is
+vm_wait_port: 22           # Talos maintenance mode: 50000
+vm_wait_for_cloud_init: "{{ vm_wait_port | int == 22 }}"
+

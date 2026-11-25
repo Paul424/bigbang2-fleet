@@ -1,0 +1,78 @@
+# Patch alleen voor control planes
+apiVersion: v1alpha1
+kind: Layer2VIPConfig
+name: {{ talos_vip }}
+link: {{ talos_link_alias }}
+---
+apiVersion: v1alpha1
+kind: KubeAPIServerConfig
+certExtraSANs:
+  - {{ talos_vip }}
+  - {{ talos_endpoint_host }}
+{% if talos_schedule_on_controlplanes | bool %}
+---
+# Workloads op de control planes: taint en LB-uitsluiting weghalen
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+taints:
+  node-role.kubernetes.io/control-plane:
+    $patch: delete
+labels:
+  node.kubernetes.io/exclude-from-external-load-balancers:
+    $patch: delete
+{% endif %}
+{% if talos_cni == 'none' %}
+---
+# Geen flannel en geen kube-proxy; de CNI-rol (Cilium) installeert de CNI
+apiVersion: v1alpha1
+kind: KubeFlannelCNIConfig
+$patch: delete
+---
+apiVersion: v1alpha1
+kind: KubeProxyConfig
+enabled: false
+{% endif %}
+---
+apiVersion: v1alpha1
+kind: KubeAdmissionControlConfig
+name: PodSecurity
+configuration:
+  apiVersion: pod-security.admission.config.k8s.io/v1alpha1
+  kind: PodSecurityConfiguration
+  defaults:
+    enforce: {{ talos_psa.enforce }}
+    enforce-version: latest
+    audit: {{ talos_psa.audit }}
+    audit-version: latest
+    warn: {{ talos_psa.warn }}
+    warn-version: latest
+{% set _extra_ns = talos_psa.exempt_namespaces | default([]) | difference(['kube-system']) %}
+{% if _extra_ns | length > 0 %}
+  # Lijsten worden aangevuld bij de merge; kube-system staat al in de default
+  exemptions:
+    namespaces: {{ _extra_ns | to_json }}
+{% endif %}
+{% if talos_oidc.issuer_url is defined %}
+---
+apiVersion: v1alpha1
+kind: KubeAuthenticationConfig
+configuration:
+  jwt:
+    - issuer:
+        url: {{ talos_oidc.issuer_url }}
+        audiences: {{ talos_oidc.audiences | default(['kubernetes']) | to_json }}
+        audienceMatchPolicy: MatchAny
+{% if _root_ca.stat.exists %}
+        # Keycloak-cert komt van step-ca
+        certificateAuthority: |
+          {{ lookup('ansible.builtin.file', talos_root_ca_file) | indent(10) }}
+{% endif %}
+      claimMappings:
+        username:
+          claim: {{ talos_oidc.username_claim | default('preferred_username') }}
+          prefix: ""
+        groups:
+          claim: {{ talos_oidc.groups_claim | default('groups') }}
+          prefix: ""
+      claimValidationRules: []
+{% endif %}

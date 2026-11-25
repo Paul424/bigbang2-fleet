@@ -1,0 +1,14 @@
+---
+# Talos-versie: zie https://github.com/siderolabs/talos/releases
+talos_version: "{{ undef(hint='Zet talos_version in group_vars/cluster_vms') }}"
+talos_factory_url: https://factory.talos.dev
+# Image Factory schematic; nocloud-platform leest de cloud-init drive van Proxmox
+talos_schematic:
+  customization:
+    systemExtensions:
+      officialExtensions:
+        - siderolabs/qemu-guest-agent
+talos_platform: nocloud
+talos_arch: amd64
+talos_iso_dir: /var/lib/vz/template/iso     # storage 'local', content ISO
+talos_iso_name: "talos-{{ talos_version }}-{{ talos_platform }}-{{ talos_arch }}.iso"

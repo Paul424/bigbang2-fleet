@@ -2,7 +2,7 @@
 # Verwijdert VM's. Altijd met --limit en bevestiging:
 #   ansible-playbook playbooks/vms-destroy.yml --limit dns2 -e confirm=yes
 - name: Infra-VM's verwijderen
-  hosts: infra_vms
+  hosts: infra_vms:cluster_vms
   gather_facts: false
   vars:
     vm_state: absent

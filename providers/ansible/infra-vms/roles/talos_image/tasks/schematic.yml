@@ -1,0 +1,21 @@
+---
+# Schematic-ID is deterministisch: zelfde inhoud -> zelfde ID.
+# Zet talos_schematic_id en talos_installer_image.
+- name: Schematic registreren bij de Image Factory
+  ansible.builtin.uri:
+    url: "{{ talos_factory_url }}/schematics"
+    method: POST
+    body: "{{ talos_schematic | to_nice_yaml }}"
+    headers:
+      Content-Type: application/yaml
+    status_code: [200, 201]
+  register: _schematic
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Schematic-ID en installer-image
+  ansible.builtin.set_fact:
+    talos_schematic_id: "{{ _schematic.json.id }}"
+    talos_installer_image: "{{ talos_factory_url | regex_replace('^https://', '') }}/{{ talos_platform }}-installer/{{ _schematic.json.id }}:{{ talos_version }}"
+  run_once: true

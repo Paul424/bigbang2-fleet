@@ -1,0 +1,52 @@
+---
+# Per cluster te zetten in group_vars/<cluster>.yml:
+#   talos_cluster_name, talos_vip, talos_endpoint, talos_node_subnet
+talos_cluster_name: "{{ undef(hint='Zet talos_cluster_name in group_vars/<cluster>.yml') }}"
+talos_vip: "{{ undef(hint='Zet talos_vip in group_vars/<cluster>.yml') }}"
+talos_endpoint_host: "api.{{ talos_cluster_name }}.{{ lab_domain }}"
+talos_endpoint: "https://{{ talos_endpoint_host }}:6443"
+talos_node_subnet: "{{ undef(hint='Zet talos_node_subnet in group_vars/<cluster>.yml') }}"
+
+# Per node (host_vars of hosts.yml): controlplane | worker
+talos_role: controlplane
+# Optionele extra patch per node (dict, wordt als YAML meegegeven bij apply)
+talos_node_patch: {}
+
+talos_install_disk: /dev/sda
+# Alias voor de NIC (LinkAliasConfig) waar de VIP op komt; match op MAC-prefix
+talos_link_alias: lan0
+talos_link_mac_glob: "bc:24:11:*"
+talos_schedule_on_controlplanes: false
+# flannel = Talos-default; none = geen CNI en geen kube-proxy (bv. voor Cilium)
+talos_cni: flannel
+talos_extra_patches: []            # lijst met dicts, voor alle nodes
+
+# ResolverConfig: DNS van de nodes (PowerDNS-recursors)
+talos_nameservers: [192.168.48.10, 192.168.48.11]
+
+# KubeAdmissionControlConfig: Pod Security Admission
+talos_psa:
+  enforce: privileged              # later: baseline / restricted (Kyverno doet de rest)
+  audit: restricted
+  warn: restricted
+  exempt_namespaces: []           # extra t.o.v. kube-system (staat er standaard al in)
+
+# KubeAuthenticationConfig: OIDC via Keycloak. Leeg = geen JWT-authenticator.
+#   issuer_url:     https://keycloak.<cluster>.<domein>/realms/<realm>
+#   audiences:      [kubernetes, headlamp]
+#   username_claim: preferred_username
+#   groups_claim:   groups
+talos_oidc: {}
+
+# step-ca root als TrustedRootsConfig (overgeslagen als het bestand ontbreekt)
+talos_root_ca_file: "{{ playbook_dir }}/../files/pki/root_ca.crt"
+
+# Opslag op de controller:
+#   secrets.yaml  -> ansible-vault versleuteld, in git
+#   talosconfig / kubeconfig -> gitignored
+talos_files_dir: "{{ playbook_dir }}/../files/talos/{{ talos_cluster_name }}"
+talos_vault_password_file: "{{ lookup('ansible.builtin.config', 'DEFAULT_VAULT_PASSWORD_FILE') }}"
+
+# Bij een al geconfigureerde node: auto = rebooten als de wijziging dat vereist
+talos_apply_mode: auto
+talos_health_timeout: 20m

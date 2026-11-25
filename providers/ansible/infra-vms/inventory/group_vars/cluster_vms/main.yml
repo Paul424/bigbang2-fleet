@@ -1,0 +1,24 @@
+---
+# Talos-VM's: lege VM die boot van de Talos nocloud-ISO. Het statische IP
+# komt uit de Proxmox cloud-init drive (ipconfig0), dus al in maintenance mode.
+talos_version: v1.14.7            # controleer: https://github.com/siderolabs/talos/releases
+vm_iso: "local:iso/talos-{{ talos_version }}-nocloud-amd64.iso"
+
+vm_cpu: x86-64-v3
+vm_cores: 4
+vm_memory: 8192
+vm_disk_size: 20G
+vm_storage: local-lvm
+vm_onboot: true
+
+# Geen SSH/cloud-init in Talos; wacht op de Talos API (maintenance mode)
+vm_wait_port: 50000
+
+vm_nameservers: [192.168.48.10, 192.168.48.11]
+
+# Talos-rol per node; workers zetten in hosts.yml: talos_role: worker
+talos_role: controlplane
+
+# Geen flannel/kube-proxy: de CNI (eBPF, kube-proxy replacement) wordt door
+# een aparte rol geïnstalleerd na de bootstrap
+talos_cni: none

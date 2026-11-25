@@ -1,0 +1,68 @@
+---
+# Eén node; draait op de controller binnen de run_once-block van main.yml.
+- name: "{{ node }}: variabelen"
+  ansible.builtin.set_fact:
+    _ip: "{{ hostvars[node].ansible_host }}"
+    _role: "{{ hostvars[node].talos_role | default('controlplane') }}"
+    _patch: "{{ hostvars[node].talos_node_patch | default({}) }}"
+
+- name: "{{ node }}: node-patch schrijven"
+  ansible.builtin.copy:
+    content: "{{ _patch | to_nice_yaml }}"
+    dest: "{{ _tmp.path }}/node-{{ node }}.yaml"
+    mode: "0600"
+  when: _patch | length > 0
+
+- name: "{{ node }}: argumenten"
+  ansible.builtin.set_fact:
+    _apply_args: >-
+      {{ ['apply-config', '--file=' ~ _tmp.path ~ '/out/' ~ _role ~ '.yaml']
+         + (['--config-patch=@' ~ _tmp.path ~ '/node-' ~ node ~ '.yaml'] if _patch | length > 0 else []) }}
+
+- name: "{{ node }}: al geconfigureerd?"
+  ansible.builtin.command:
+    argv: [timeout, "20", talosctl, --talosconfig, "{{ _talosconfig }}", -n, "{{ _ip }}", -e, "{{ _ip }}", version, --short]
+  register: _configured
+  changed_when: false
+  failed_when: false
+
+# Maintenance mode: eerste config, node installt naar disk en reboot
+- name: "{{ node }}: eerste config ({{ _role }}, maintenance mode)"
+  ansible.builtin.command:
+    argv: "{{ ['talosctl', '-n', _ip, '-e', _ip] + _apply_args + ['--insecure'] }}"
+  when: _configured.rc != 0
+  changed_when: true
+
+# Al geconfigureerd: alleen toepassen als er iets verandert
+# talosctl schrijft de dry-run-uitvoer (incl. 'No changes') naar stderr
+- name: "{{ node }}: wijzigingen bepalen (dry-run)"
+  ansible.builtin.command:
+    argv: "{{ ['talosctl', '--talosconfig', _talosconfig, '-n', _ip, '-e', _ip] + _apply_args + ['--dry-run', '--mode=' ~ talos_apply_mode] }}"
+  register: _dry
+  when: _configured.rc == 0
+  changed_when: false
+
+- name: "{{ node }}: config bijwerken"
+  when:
+    - _configured.rc == 0
+    - "'No changes' not in (_dry.stdout ~ _dry.stderr)"
+  block:
+    - name: "{{ node }}: diff"
+      ansible.builtin.debug:
+        msg: "{{ _dry.stdout_lines + _dry.stderr_lines }}"
+
+    - name: "{{ node }}: apply-config --mode={{ talos_apply_mode }}"
+      ansible.builtin.command:
+        argv: "{{ ['talosctl', '--talosconfig', _talosconfig, '-n', _ip, '-e', _ip] + _apply_args + ['--mode=' ~ talos_apply_mode] }}"
+      changed_when: true
+
+    # Pas naar de volgende node als het cluster weer gezond is (evt. na reboot)
+    - name: "{{ node }}: wachten op een gezond cluster"
+      ansible.builtin.command:
+        argv: >-
+          {{ ['talosctl', '--talosconfig', _talosconfig, '-n', _first_cp, '-e', _first_cp, 'health',
+              '--wait-timeout=' ~ talos_health_timeout,
+              '--control-plane-nodes=' ~ (_cp_ips | join(','))]
+             + (['--worker-nodes=' ~ (_worker_ips | join(','))] if _worker_ips | length > 0 else []) }}
+      changed_when: false
+      when: _cluster_exists | bool

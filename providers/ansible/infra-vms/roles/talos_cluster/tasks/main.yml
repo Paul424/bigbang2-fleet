@@ -1,0 +1,222 @@
+---
+# Alles draait één keer, op de controller. Nodes worden in apply_node.yml
+# één voor één afgehandeld, zodat er nooit twee tegelijk rebooten.
+- name: Talos-cluster {{ talos_cluster_name }}
+  run_once: true
+  delegate_to: localhost
+  become: false
+  vars:
+    _cp_nodes: "{{ ansible_play_hosts_all | map('extract', hostvars) | selectattr('talos_role', 'equalto', 'controlplane') | map(attribute='inventory_hostname') | list }}"
+    _worker_nodes: "{{ ansible_play_hosts_all | difference(_cp_nodes) }}"
+    _cp_ips: "{{ _cp_nodes | map('extract', hostvars, 'ansible_host') | list }}"
+    _worker_ips: "{{ _worker_nodes | map('extract', hostvars, 'ansible_host') | list }}"
+    _first_cp: "{{ _cp_ips | first }}"
+    _talosconfig: "{{ talos_files_dir }}/talosconfig"
+  block:
+    # --- Voorbereiding ---------------------------------------------------
+    - name: talosctl op de controller
+      ansible.builtin.command: talosctl version --client --short
+      register: _talosctl
+      changed_when: false
+
+    - name: Waarschuwing bij versieverschil talosctl / Talos
+      ansible.builtin.debug:
+        msg: "talosctl is '{{ _talosctl.stdout_lines | last }}', cluster gebruikt {{ talos_version }}"
+      when: talos_version not in _talosctl.stdout
+
+    - name: Minstens één control plane
+      ansible.builtin.assert:
+        that: _cp_nodes | length > 0
+
+    - name: Vault-wachtwoordbestand nodig om secrets te versleutelen
+      ansible.builtin.assert:
+        that: talos_vault_password_file | default('', true) | length > 0
+        fail_msg: "Zet vault_password_file in ansible.cfg (of talos_vault_password_file)"
+
+    - name: Map voor clusterbestanden
+      ansible.builtin.file:
+        path: "{{ talos_files_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Tijdelijke map
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: "talos-{{ talos_cluster_name }}"
+      register: _tmp
+
+    - name: Bestaan de cluster-secrets al?
+      ansible.builtin.stat:
+        path: "{{ talos_files_dir }}/secrets.yaml"
+      register: _secrets
+
+    - name: Cluster-secrets genereren en met ansible-vault versleutelen
+      when: not _secrets.stat.exists
+      block:
+        - name: talosctl gen secrets
+          ansible.builtin.command:
+            argv: [talosctl, gen, secrets, -o, "{{ _tmp.path }}/secrets.yaml"]
+          changed_when: true
+
+        - name: ansible-vault encrypt
+          ansible.builtin.command:
+            argv:
+              - ansible-vault
+              - encrypt
+              - "--vault-password-file={{ talos_vault_password_file }}"
+              - "--output={{ talos_files_dir }}/secrets.yaml"
+              - "{{ _tmp.path }}/secrets.yaml"
+          changed_when: true
+
+    - name: Secrets (ontsleuteld) in de tijdelijke map
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.unvault', talos_files_dir ~ '/secrets.yaml') }}"
+        dest: "{{ _tmp.path }}/secrets.yaml"
+        mode: "0600"
+      no_log: true
+
+    - name: Installer-image bepalen
+      ansible.builtin.include_role:
+        name: talos_image
+        tasks_from: schematic.yml
+
+    # --- Configs genereren -----------------------------------------------
+    - name: Extra patches schrijven
+      ansible.builtin.copy:
+        content: "{{ item | to_nice_yaml }}"
+        dest: "{{ _tmp.path }}/extra-{{ idx }}.yaml"
+        mode: "0600"
+      loop: "{{ talos_extra_patches }}"
+      loop_control:
+        index_var: idx
+
+    - name: Staat het root-cert van step-ca klaar?
+      ansible.builtin.stat:
+        path: "{{ talos_root_ca_file }}"
+      register: _root_ca
+
+    - name: Patches schrijven
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "{{ _tmp.path }}/{{ item }}"
+        mode: "0600"
+      loop: [common.yaml, controlplane.yaml]
+
+    - name: TrustedRootsConfig schrijven
+      ansible.builtin.template:
+        src: trusted-roots.yaml.j2
+        dest: "{{ _tmp.path }}/trusted-roots.yaml"
+        mode: "0600"
+      when: _root_ca.stat.exists
+
+    - name: talosctl gen config
+      ansible.builtin.command:
+        argv: >-
+          {{ ['talosctl', 'gen', 'config', talos_cluster_name, talos_endpoint,
+              '--with-secrets=' ~ _tmp.path ~ '/secrets.yaml',
+              '--talos-version=' ~ talos_version,
+              '--config-patch=@' ~ _tmp.path ~ '/common.yaml',
+              '--config-patch-control-plane=@' ~ _tmp.path ~ '/controlplane.yaml',
+              '--output-types=controlplane,worker,talosconfig',
+              '--output=' ~ _tmp.path ~ '/out',
+              '--force']
+             + (['--config-patch=@' ~ _tmp.path ~ '/trusted-roots.yaml'] if _root_ca.stat.exists else [])
+             + (range(talos_extra_patches | length) | map('string') | map('regex_replace', '^(.*)$', '--config-patch=@' ~ _tmp.path ~ '/extra-\\1.yaml') | list) }}
+      changed_when: false
+
+    - name: talosconfig klaarzetten (endpoints = control planes)
+      ansible.builtin.command:
+        argv: "{{ ['talosctl', '--talosconfig', _tmp.path ~ '/out/talosconfig', 'config', 'endpoint'] + _cp_ips }}"
+      changed_when: false
+
+    - name: talosconfig standaard-node
+      ansible.builtin.command:
+        argv: [talosctl, --talosconfig, "{{ _tmp.path }}/out/talosconfig", config, node, "{{ _first_cp }}"]
+      changed_when: false
+
+    - name: talosconfig opslaan
+      ansible.builtin.copy:
+        src: "{{ _tmp.path }}/out/talosconfig"
+        dest: "{{ _talosconfig }}"
+        mode: "0600"
+
+    # --- Apply per node --------------------------------------------------
+    # Vóór de bootstrap geeft 'get etcdmembers' rc=0 met een lege lijst;
+    # het cluster bestaat pas als er members zijn.
+    - name: Bestaat het cluster al (etcd)?
+      ansible.builtin.command:
+        argv: [timeout, "20", talosctl, --talosconfig, "{{ _talosconfig }}", -n, "{{ _first_cp }}", -e, "{{ _first_cp }}", get, etcdmembers, -o, json]
+      register: _etcd
+      changed_when: false
+      failed_when: false
+
+    - name: Cluster-status
+      ansible.builtin.set_fact:
+        _cluster_exists: "{{ _etcd.rc == 0 and _etcd.stdout | trim | length > 0 }}"
+
+    - name: Config toepassen
+      ansible.builtin.include_tasks: apply_node.yml
+      loop: "{{ _cp_nodes + _worker_nodes }}"
+      loop_control:
+        loop_var: node
+
+    # --- Bootstrap -------------------------------------------------------
+    - name: Wachten tot de eerste control plane geconfigureerd is
+      ansible.builtin.command:
+        argv: [timeout, "20", talosctl, --talosconfig, "{{ _talosconfig }}", -n, "{{ _first_cp }}", -e, "{{ _first_cp }}", version, --short]
+      register: _ready
+      until: _ready.rc == 0
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: etcd bootstrappen
+      ansible.builtin.command:
+        argv: [talosctl, --talosconfig, "{{ _talosconfig }}", -n, "{{ _first_cp }}", -e, "{{ _first_cp }}", bootstrap]
+      register: _bootstrap
+      changed_when: _bootstrap.rc == 0
+      failed_when: _bootstrap.rc != 0 and 'AlreadyExists' not in _bootstrap.stderr
+      when: not _cluster_exists | bool
+
+    # Zonder CNI worden de nodes niet Ready; dan alleen wachten op de API-server.
+    # De CNI-rol doet daarna de volledige health-check.
+    - name: Wachten op de API-server (cni=none)
+      ansible.builtin.uri:
+        url: "https://{{ _first_cp }}:6443/readyz"
+        validate_certs: false
+      register: _readyz
+      until: _readyz.status == 200
+      retries: 60
+      delay: 10
+      when: talos_cni == 'none'
+
+    - name: Wachten op een gezond cluster
+      when: talos_cni != 'none'
+      ansible.builtin.command:
+        argv: >-
+          {{ ['talosctl', '--talosconfig', _talosconfig, '-n', _first_cp, '-e', _first_cp, 'health',
+              '--wait-timeout=' ~ talos_health_timeout,
+              '--control-plane-nodes=' ~ (_cp_ips | join(','))]
+             + (['--worker-nodes=' ~ (_worker_ips | join(','))] if _worker_ips | length > 0 else []) }}
+      changed_when: false
+
+    - name: kubeconfig ophalen
+      ansible.builtin.command:
+        argv: [talosctl, --talosconfig, "{{ _talosconfig }}", -n, "{{ _first_cp }}", -e, "{{ _first_cp }}",
+               kubeconfig, "{{ talos_files_dir }}/kubeconfig", --force, --merge=false]
+      changed_when: false
+
+    - name: Samenvatting
+      ansible.builtin.debug:
+        msg:
+          - "Cluster:     {{ talos_cluster_name }} ({{ talos_endpoint }})"
+          - "Nodes:       {{ (_cp_ips + _worker_ips) | join(', ') }}"
+          - "talosconfig: export TALOSCONFIG={{ _talosconfig | realpath }}"
+          - "kubeconfig:  export KUBECONFIG={{ (talos_files_dir ~ '/kubeconfig') | realpath }}"
+
+  always:
+    - name: Tijdelijke map opruimen (bevat secrets en machine configs)
+      ansible.builtin.file:
+        path: "{{ _tmp.path }}"
+        state: absent
+      when: _tmp.path is defined

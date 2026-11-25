@@ -1,0 +1,36 @@
+# Patch voor alle nodes (Talos multi-document config).
+# Hostname, IP, gateway komen uit de Proxmox cloud-init drive (nocloud);
+# HostnameConfig 'auto: stable' heeft de laagste prioriteit, dus cloud-init wint.
+machine:
+  certSANs:
+    - {{ talos_vip }}
+    - {{ talos_endpoint_host }}
+---
+apiVersion: v1alpha1
+kind: UnattendedInstallConfig
+installer:
+  image: {{ talos_installer_image }}
+provisioning:
+  diskSelector:
+    match: disk.dev_path == "{{ talos_install_disk }}"
+  wipe: false
+---
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+nodeIP:
+  validSubnets:
+    - {{ talos_node_subnet }}
+---
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+{% for ns in talos_nameservers %}
+  - address: {{ ns }}
+{% endfor %}
+---
+# Vaste naam voor de (enige) NIC, op MAC-prefix van Proxmox (zie vm_mac)
+apiVersion: v1alpha1
+kind: LinkAliasConfig
+name: {{ talos_link_alias }}
+selector:
+  match: glob("{{ talos_link_mac_glob }}", mac(link.permanent_addr))

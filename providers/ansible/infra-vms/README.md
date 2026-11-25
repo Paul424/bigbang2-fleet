@@ -16,12 +16,20 @@ roles/
   proxmox_vm/                # clone + config + resize + start through the API
   step_ca/                   # installs step-ca, creates root + intermediate CA
   powerdns/                  # PowerDNS auth + recursor, zones, TSIG keys
+  talos_image/               # Talos nocloud ISO from the Image Factory to the nodes
+  talos_cluster/             # Talos machine configs, apply, bootstrap, kubeconfig
+  cilium/                    # CNI: Cilium (eBPF, kube-proxy replacement, L2 LB pool)
 playbooks/
   pve-template.yml
   vms.yml
   vms-destroy.yml
   step-ca.yml
   dns.yml
+  talos-vms.yml
+  talos-cluster.yml
+files/talos/<cluster>/
+  secrets.yaml               # Talos cluster secrets, ansible-vault encrypted (commit it)
+  talosconfig, kubeconfig    # admin credentials (gitignored)
 files/pki/
   root_ca.crt                # fetched root certificate (public, commit it)
   root_ca_key                # fetched encrypted root key (gitignored!)
@@ -149,6 +157,90 @@ with dns1 as primary and dns2 as secondary. Creates the zones from
 `inventory/group_vars/dns.yml` and a TSIG key per cluster subzone. Add
 `vault_pdns_api_key` and `vault_dns_tsig_keys` to the vault first. See
 [docs/DNS.md](../../../docs/DNS.md).
+
+## Talos VMs
+
+```sh
+ansible-playbook providers/ansible/infra-vms/playbooks/talos-vms.yml --limit 'proxmox,mgmt'
+```
+
+1. Registers a schematic with the Talos Image Factory (extension
+   `siderolabs/qemu-guest-agent`) and downloads the **nocloud** ISO to
+   `local:iso` on every Proxmox node.
+2. Creates an empty VM per node (no clone): SeaBIOS, q35, `x86-64-v3`, VirtIO
+   SCSI, disk + cloud-init drive + ISO, boot order `scsi0;ide2`.
+3. Talos reads the static IP, gateway and nameservers from the cloud-init
+   drive (`ipconfig0`), so the node is reachable on its final IP in maintenance
+   mode. The playbook waits for the Talos API on `:50000`.
+
+Sizing and the Talos version are in `inventory/group_vars/cluster_vms/main.yml`.
+The nodes are in `inventory/hosts.yml` under `cluster_vms`. The installer
+image to use in the Talos machine config is printed at the end of the ISO play.
+
+## Talos cluster
+
+```sh
+ansible-playbook providers/ansible/infra-vms/playbooks/talos-cluster.yml -e talos_cluster=mgmt
+export TALOSCONFIG=$PWD/providers/ansible/infra-vms/files/talos/mgmt/talosconfig
+export KUBECONFIG=$PWD/providers/ansible/infra-vms/files/talos/mgmt/kubeconfig
+```
+
+Runs entirely on the controller and needs `talosctl` (same minor version as
+`talos_version`), `helm`, and `vault_password_file` in `ansible.cfg`.
+`api.<cluster>.bigbangfleet.lab` must resolve on the controller, because the
+kubeconfig points to it.
+
+1. **Secrets**: on the first run, `talosctl gen secrets` creates
+   `files/talos/<cluster>/secrets.yaml`, encrypted with ansible-vault. Every
+   later run regenerates the same configs from it.
+2. **Configs**: `talosctl gen config --with-secrets` plus patches, in a
+   temporary directory that is always removed. Talos 1.14 generates a
+   multi-document config, so the patches target those documents:
+   - all nodes (`common.yaml.j2`): `machine.certSANs`, `UnattendedInstallConfig`
+     (nocloud installer image from the schematic, disk `/dev/sda`),
+     `KubeNodeConfig.nodeIP.validSubnets`, `ResolverConfig` (dns1/dns2), a
+     `LinkAliasConfig` `lan0` for the NIC (MAC prefix `bc:24:11`), and the
+     step-ca root as `TrustedRootsConfig`;
+   - control planes (`controlplane.yaml.j2`): `Layer2VIPConfig` on `lan0`,
+     `KubeAPIServerConfig.certExtraSANs`, Pod Security (`talos_psa`), OIDC
+     (`talos_oidc`), the control-plane taint removed if
+     `talos_schedule_on_controlplanes`, and with `talos_cni: none` no
+     `KubeFlannelCNIConfig` and `KubeProxyConfig.enabled: false`;
+   - optional: `talos_extra_patches` (all nodes) and `talos_node_patch` (per node).
+
+   Hostname, IP, gateway and DNS search domain come from the Proxmox cloud-init
+   drive. The generated `HostnameConfig` (`auto: stable`) has the lowest
+   priority, so the cloud-init hostname wins.
+3. **Apply**, one node at a time. A node in maintenance mode gets
+   `apply-config --insecure`. A configured node gets a `--dry-run` first, and
+   is only updated (`--mode=auto`, may reboot) if the config changed. After
+   each update the playbook waits for `talosctl health` before the next node.
+4. **Bootstrap** etcd on the first control plane (skipped if etcd already
+   exists), wait for `talosctl health`, then write `talosconfig` and
+   `kubeconfig` to `files/talos/<cluster>/`.
+
+The clusters use `talos_cni: none` (no flannel, no kube-proxy). In that case
+the `talos_cluster` role only waits for the API server, and the `cilium` role
+then installs the CNI:
+
+- Helm chart `cilium` in `kube-system` (version `cilium_version`), with the
+  Talos settings (KubePrism `localhost:7445`, cgroup, capabilities),
+  `kubeProxyReplacement`, BPF masquerading and Hubble;
+- `policyCIDRMatchMode: [nodes]`, so `ipBlock` rules in NetworkPolicies
+  (Big Bang `controlPlaneCidr`) match node IPs;
+- Istio compatibility (`socketLB.hostNamespaceOnly`, `cni.exclusive: false`);
+- a `CiliumLoadBalancerIPPool` from `cilium_lb_pool` plus a
+  `CiliumL2AnnouncementPolicy`, so LoadBalancer services get an IP from
+  the cluster's IPAM pool without MetalLB;
+- it finishes when all nodes are Ready and `talosctl health` passes.
+
+Flux can take over the Helm release later (same name and namespace).
+Run only the CNI part with `--tags cilium`.
+
+Cluster settings are in `inventory/group_vars/<cluster>.yml`
+(`talos_cluster_name`, `talos_vip`, `talos_node_subnet`,
+`talos_schedule_on_controlplanes`). The node role is `talos_role`
+(`controlplane` by default, set `worker` per host).
 
 ## Design choices
 

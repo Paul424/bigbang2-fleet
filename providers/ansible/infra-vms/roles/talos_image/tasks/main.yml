@@ -1,0 +1,17 @@
+---
+- name: Schematic
+  ansible.builtin.include_tasks: schematic.yml
+
+- name: Talos ISO downloaden naar {{ talos_iso_dir }}
+  ansible.builtin.get_url:
+    url: "{{ talos_factory_url }}/image/{{ talos_schematic_id }}/{{ talos_version }}/{{ talos_platform }}-{{ talos_arch }}.iso"
+    dest: "{{ talos_iso_dir }}/{{ talos_iso_name }}"
+    mode: "0644"
+    timeout: 300
+
+- name: Schematic
+  ansible.builtin.debug:
+    msg:
+      - "Schematic ID: {{ talos_schematic_id }}"
+      - "Installer:    {{ talos_installer_image }}"
+  run_once: true

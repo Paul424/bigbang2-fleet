@@ -40,6 +40,7 @@
       delegate_to: localhost
       block:
         - name: Clone van template {{ vm_template_vmid }}
+          when: vm_iso | length == 0
           community.proxmox.proxmox_kvm:
             node: "{{ vm_template_node }}"
             vmid: "{{ vm_template_vmid }}"
@@ -52,6 +53,28 @@
             format: unspecified
             timeout: 600
           register: _clone
+
+        - name: Lege VM aanmaken die boot van {{ vm_iso }}
+          when: vm_iso | length > 0
+          community.proxmox.proxmox_kvm:
+            node: "{{ vm_node }}"
+            vmid: "{{ vm_id }}"
+            name: "{{ vm_name }}"
+            ostype: l26
+            machine: q35
+            bios: seabios
+            cpu: "{{ vm_cpu }}"
+            numa_enabled: false
+            scsihw: virtio-scsi-pci
+            scsi:
+              scsi0: "{{ vm_storage }}:{{ vm_disk_size | regex_replace('[Gg]$', '') }},discard=on,ssd=1"
+            ide:
+              ide0: "{{ vm_storage }}:cloudinit"
+              ide2: "{{ vm_iso }},media=cdrom"
+            # Lege disk eerst; na installatie boot Talos van disk, anders van de ISO
+            boot: "order=scsi0;ide2"
+            agent: "enabled=1"
+            state: present
 
         - name: Hardware en cloud-init configureren
           community.proxmox.proxmox_kvm:
@@ -80,6 +103,20 @@
             size: "{{ vm_disk_size }}"
             state: resized
 
+        - name: Extra disks
+          community.proxmox.proxmox_disk:
+            vmid: "{{ vm_id }}"
+            disk: "{{ item.disk }}"
+            storage: "{{ item.storage }}"
+            size: "{{ item.size }}"
+            discard: "on"
+            ssd: true
+            backup: false          # geen vzdump van Ceph-data
+            state: present
+          loop: "{{ vm_extra_disks }}"
+          loop_control:
+            label: "{{ item.disk }} {{ item.storage }}:{{ item.size }}G"
+
         - name: VM starten
           community.proxmox.proxmox_kvm:
             node: "{{ vm_node }}"
@@ -87,12 +124,12 @@
             state: started
           when: vm_state == 'started'
 
-    - name: Wachten op SSH
+    - name: Wachten op poort {{ vm_wait_port }}
       ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
-        port: 22
+        port: "{{ vm_wait_port }}"
         timeout: 300
-        search_regex: OpenSSH
+        search_regex: "{{ 'OpenSSH' if vm_wait_port | int == 22 else omit }}"
       delegate_to: localhost
       when:
         - vm_state == 'started'
@@ -107,6 +144,7 @@
       when:
         - vm_state == 'started'
         - vm_wait_for_ssh | bool
+        - vm_wait_for_cloud_init | bool
 
     - name: cloud-init waarschuwingen
       ansible.builtin.debug:

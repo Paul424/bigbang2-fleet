@@ -1,0 +1,28 @@
+---
+vm_searchdomain: "mgmt.{{ lab_domain }}"
+vm_tags: [talos, mgmt]
+# Meer geheugen dan de andere clusters (8 GB) vanwege Rook-Ceph (OSD, mon, mgr)
+vm_memory: 12288
+
+# mgmt is ook het storage-cluster (Rook-Ceph). Elke node krijgt een ruwe disk
+# uit de data-VG van zijn Proxmox-host als OSD (in Talos: /dev/sdb).
+# 'storage' = Proxmox storage-ID van de data-VG (controleer met: pvesm status)
+vm_extra_disks:
+  - { disk: scsi1, storage: data, size: 400 }
+
+# Talos-cluster (roles/talos_cluster)
+talos_cluster_name: mgmt
+talos_vip: 192.168.49.1
+talos_node_subnet: 192.168.49.0/26
+# Control planes draaien ook workloads
+talos_schedule_on_controlplanes: true
+
+# OIDC via Keycloak (draait in mgmt zelf; tot dan werkt alleen de admin-kubeconfig)
+talos_oidc:
+  issuer_url: "https://keycloak.mgmt.{{ lab_domain }}/realms/bigbangfleet"
+  audiences: [kubernetes, headlamp]
+  username_claim: preferred_username
+  groups_claim: groups
+
+# Cilium LoadBalancer-pool (docs/IPAM.md: +40 .. +62 van het /26-blok)
+cilium_lb_pool: { start: 192.168.49.40, stop: 192.168.49.62 }

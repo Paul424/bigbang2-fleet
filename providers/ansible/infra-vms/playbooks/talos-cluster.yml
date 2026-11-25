@@ -1,0 +1,14 @@
+---
+# Genereert de Talos machine configs, past ze toe, bootstrapt etcd, haalt
+# talosconfig + kubeconfig op en installeert de CNI (Cilium).
+# Draait volledig op de controller.
+#   ansible-playbook providers/ansible/infra-vms/playbooks/talos-cluster.yml -e talos_cluster=mgmt
+#   ... --tags cilium     # alleen de CNI
+- name: Talos-cluster
+  hosts: "{{ talos_cluster | default('mgmt') }}"
+  gather_facts: false
+  roles:
+    - role: talos_cluster
+      tags: [talos]
+    - role: cilium
+      tags: [cilium]

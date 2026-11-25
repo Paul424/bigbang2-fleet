@@ -40,7 +40,8 @@ Clients pick up the new mask on their next DHCP renewal.
 | `.1`                | p1 (Proxmox)                            | planned¹          |
 | `.2`                | p2 (Proxmox)                            | planned¹          |
 | `.3`                | p3 (Proxmox)                            | planned¹          |
-| `.4` – `.9`         | Reserved for more Proxmox nodes         |                   |
+| `.4` – `.6`         | p4 – p6 (Proxmox)                       | future            |
+| `.7` – `.9`         | Reserved for more Proxmox nodes         |                   |
 | `.10`               | dns1 (PowerDNS auth + recursor), on p1  | planned           |
 | `.11`               | dns2 (PowerDNS auth + recursor), on p2  | planned           |
 | `.12` – `.19`       | Reserved for DNS                        |                   |
@@ -71,6 +72,17 @@ Each cluster gets a /26 (64 addresses) with a fixed layout:
 | dev     | `192.168.49.64/26`  | `.65`   | `.74` – `.83`   | `.84` – `.103`  | `.104` – `.126` |
 | siem    | `192.168.49.128/26` | `.129`  | `.138` – `.147` | `.148` – `.167` | `.168` – `.190` |
 | wrk01   | `192.168.49.192/26` | `.193`  | `.202` – `.211` | `.212` – `.231` | `.232` – `.254` |
+
+### Cluster nodes
+
+| Cluster | Node     | VMID | Proxmox | IP              | DNS                           |
+|---------|----------|------|---------|-----------------|-------------------------------|
+| mgmt    | mgmt-cp1 | 401  | p1      | `192.168.49.10` | `cp1.mgmt.bigbangfleet.lab`   |
+| mgmt    | mgmt-cp2 | 402  | p2      | `192.168.49.11` | `cp2.mgmt.bigbangfleet.lab`   |
+| mgmt    | mgmt-cp3 | 403  | p3      | `192.168.49.12` | `cp3.mgmt.bigbangfleet.lab`   |
+
+The mgmt nodes are control plane and also run workloads. They also run Rook-Ceph (see [STORAGE.md](STORAGE.md)).
+After p4–p6 are added, they get workers `mgmt-w1` – `mgmt-w3` on `192.168.49.20` – `.22`.
 
 ### Layout within a /26 (offset from the start of the block)
 

@@ -1,0 +1,5 @@
+apiVersion: v1alpha1
+kind: TrustedRootsConfig
+name: bigbangfleet-lab
+certificates: |
+  {{ lookup('ansible.builtin.file', talos_root_ca_file) | indent(2) }}

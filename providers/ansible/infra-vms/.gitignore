@@ -4,3 +4,7 @@ collections/
 .venv/
 # Versleutelde root-key van step-ca: bewaar elders (password manager / offline)
 files/pki/root_ca_key
+# Talos: secrets.yaml is ansible-vault versleuteld en hoort in git; deze niet
+files/talos/*/talosconfig
+files/talos/*/kubeconfig
+files/talos/*/cilium-values.yaml

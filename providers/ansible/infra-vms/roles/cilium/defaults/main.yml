@@ -1,0 +1,22 @@
+---
+# Cilium-versie: zie https://github.com/cilium/cilium/releases
+cilium_version: 1.18.4
+cilium_namespace: kube-system
+cilium_release: cilium          # Flux HelmRelease later met dezelfde naam/namespace
+cilium_chart_repo: https://helm.cilium.io/
+
+cilium_files_dir: "{{ playbook_dir }}/../files/talos/{{ talos_cluster_name }}"
+cilium_kubeconfig: "{{ cilium_files_dir }}/kubeconfig"
+cilium_talosconfig: "{{ cilium_files_dir }}/talosconfig"
+# Gerenderde Helm-values (gitignored), ter controle/debugging
+cilium_values_file: "{{ cilium_files_dir }}/cilium-values.yaml"
+
+# LoadBalancer-pool per cluster (group_vars/<cluster>.yml), zie docs/IPAM.md
+#   cilium_lb_pool: { start: 192.168.49.40, stop: 192.168.49.62 }
+cilium_lb_pool: "{{ undef(hint='Zet cilium_lb_pool in group_vars/<cluster>.yml') }}"
+# Interfaces waarop L2-announcements (ARP) gedaan worden
+cilium_l2_interfaces: ["^(eth|ens|enp)[0-9a-z]+$"]
+
+cilium_hubble: true
+# Extra Helm-values, worden over de standaard-values heen gelegd
+cilium_extra_values: {}

@@ -1,0 +1,18 @@
+---
+# Talos-VM's voor de clusters.
+#   ansible-playbook providers/ansible/infra-vms/playbooks/talos-vms.yml --limit 'proxmox,mgmt'
+# (--limit moet 'proxmox' bevatten voor de ISO-download)
+- name: Talos ISO op de Proxmox-nodes
+  hosts: proxmox
+  gather_facts: false
+  vars:
+    talos_version: "{{ hostvars[groups['cluster_vms'][0]].talos_version }}"
+  roles:
+    - talos_image
+
+- name: Talos-VM's provisionen
+  hosts: cluster_vms
+  gather_facts: false
+  serial: 1
+  roles:
+    - proxmox_vm
