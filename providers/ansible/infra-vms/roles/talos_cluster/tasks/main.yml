@@ -170,10 +170,15 @@
       delay: 10
       changed_when: false
 
+    # Na de eerste apply installeert/reboot de node nog; zolang etcd niet klaar is
+    # geeft bootstrap 'FailedPrecondition: bootstrap is not available yet'.
     - name: etcd bootstrappen
       ansible.builtin.command:
-        argv: [talosctl, --talosconfig, "{{ _talosconfig }}", -n, "{{ _first_cp }}", -e, "{{ _first_cp }}", bootstrap]
+        argv: [timeout, "30", talosctl, --talosconfig, "{{ _talosconfig }}", -n, "{{ _first_cp }}", -e, "{{ _first_cp }}", bootstrap]
       register: _bootstrap
+      until: _bootstrap.rc == 0 or 'AlreadyExists' in _bootstrap.stderr
+      retries: 60
+      delay: 10
       changed_when: _bootstrap.rc == 0
       failed_when: _bootstrap.rc != 0 and 'AlreadyExists' not in _bootstrap.stderr
       when: not _cluster_exists | bool

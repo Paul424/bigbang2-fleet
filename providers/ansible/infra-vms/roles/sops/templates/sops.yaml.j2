@@ -1,0 +1,6 @@
+# Aangemaakt door roles/sops; versleutelt *.sops.yaml onder deze directory
+# met de Flux-key van het {{ talos_cluster_name }}-cluster.
+creation_rules:
+  - path_regex: .*\.sops\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    pgp: {{ _fingerprint }}

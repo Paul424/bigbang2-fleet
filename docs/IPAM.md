@@ -99,6 +99,29 @@ After p4–p6 are added, they get workers `mgmt-w1` – `mgmt-w3` on `192.168.49
 > The /26 blocks are an administrative split only. Every host uses the LAN
 > netmask (`/22`) with gateway `192.168.50.1`.
 
+## Kubernetes pod and service CIDRs
+
+Each cluster gets its own pod and service CIDR, so pod and service IPs never
+overlap between clusters (needed for e.g. Cilium ClusterMesh or direct routing
+later). They only exist inside the clusters and aren't routed on the LAN.
+
+| Cluster | Pods (`podSubnets`) | Services (`serviceSubnets`) | CoreDNS        |
+|---------|---------------------|-----------------------------|----------------|
+| mgmt    | `10.10.0.0/16`      | `10.110.0.0/20`             | `10.110.0.10`  |
+| dev     | `10.11.0.0/16`      | `10.111.0.0/20`             | `10.111.0.10`  |
+| siem    | `10.12.0.0/16`      | `10.112.0.0/20`             | `10.112.0.10`  |
+| wrk01   | `10.13.0.0/16`      | `10.113.0.0/20`             | `10.113.0.10`  |
+
+- Every node gets a /24 from the pod CIDR (`Node.spec.podCIDRs`). Cilium
+  (`ipam.mode: kubernetes`) assigns pod IPs from that block.
+- Configured as `talos_pod_subnet` / `talos_service_subnet` in
+  `providers/ansible/infra-vms/inventory/group_vars/<cluster>.yml`
+  (Talos `KubeNetworkConfig`).
+- Changing them on an existing cluster means rebuilding it.
+- Reserved, don't use elsewhere: `10.10.0.0` – `10.13.255.255` (pods) and
+  `10.110.0.0` – `10.113.255.255` (services). Docker on the controller uses
+  `10.240.0.0/16` (`default-address-pools`).
+
 ## DNS
 
 Domain: **`bigbangfleet.lab`**. Each cluster has its own subzone:

@@ -1,0 +1,6 @@
+# Aangemaakt door roles/sops; versleutelt *.sops.yaml onder deze directory
+# met de Flux-key van het mgmt-cluster.
+creation_rules:
+  - path_regex: .*\.sops\.ya?ml$
+    encrypted_regex: ^(data|stringData)$
+    pgp: D22CB120287E82ED9EBD139E484F9B367BD74EF4

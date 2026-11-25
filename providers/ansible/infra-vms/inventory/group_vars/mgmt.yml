@@ -14,6 +14,8 @@ vm_extra_disks:
 talos_cluster_name: mgmt
 talos_vip: 192.168.49.1
 talos_node_subnet: 192.168.49.0/26
+talos_pod_subnet: 10.10.0.0/16
+talos_service_subnet: 10.110.0.0/20
 # Control planes draaien ook workloads
 talos_schedule_on_controlplanes: true
 

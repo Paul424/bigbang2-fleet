@@ -1,0 +1,190 @@
+---
+# SOPS GPG-key voor Flux: aanmaken (eenmalig, ansible-vault versleuteld),
+# publieke key + .sops.yaml in de repo, en de secret in het cluster.
+# Draait één keer op de controller.
+- name: SOPS-key voor {{ talos_cluster_name }}
+  run_once: true
+  delegate_to: localhost
+  become: false
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ sops_kubeconfig }}"
+  block:
+    - name: Environment-directory {{ sops_env_dir }}
+      ansible.builtin.file:
+        path: "{{ sops_env_dir }}"
+        state: directory
+        mode: "0755"
+
+    # --- SOPS GPG-key ------------------------------------------------------
+    - name: Bestaat de SOPS-key al?
+      ansible.builtin.stat:
+        path: "{{ sops_key_file }}"
+      register: _sops_key
+
+    - name: SOPS-key aanmaken
+      when: not _sops_key.stat.exists
+      block:
+        - name: Vault-wachtwoordbestand nodig
+          ansible.builtin.assert:
+            that: sops_vault_password_file | default('', true) | length > 0
+            fail_msg: "Zet vault_password_file in ansible.cfg (of sops_vault_password_file)"
+
+        - name: Tijdelijke GNUPGHOME
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: gnupg
+          register: _gnupg
+
+        - name: Batch-bestand voor gpg
+          ansible.builtin.template:
+            src: gpg-batch.j2
+            dest: "{{ _gnupg.path }}/batch"
+            mode: "0600"
+
+        - name: GPG-key genereren (zonder passphrase, zoals Flux vereist)
+          ansible.builtin.command:
+            argv: [gpg, --batch, --full-generate-key, "{{ _gnupg.path }}/batch"]
+          environment:
+            GNUPGHOME: "{{ _gnupg.path }}"
+          changed_when: true
+
+        - name: Private key exporteren
+          ansible.builtin.command:
+            argv: [gpg, --export-secret-keys, --armor, --output, "{{ _gnupg.path }}/sops.asc", "{{ sops_key_name }}"]
+          environment:
+            GNUPGHOME: "{{ _gnupg.path }}"
+          changed_when: true
+
+        - name: Publieke key exporteren
+          ansible.builtin.command:
+            argv: [gpg, --export, --armor, --output, "{{ _gnupg.path }}/sops.pub.asc", "{{ sops_key_name }}"]
+          environment:
+            GNUPGHOME: "{{ _gnupg.path }}"
+          changed_when: true
+
+        - name: Map voor de SOPS-key
+          ansible.builtin.file:
+            path: "{{ sops_dir }}"
+            state: directory
+            mode: "0700"
+
+        - name: Private key met ansible-vault versleutelen
+          ansible.builtin.command:
+            argv:
+              - ansible-vault
+              - encrypt
+              - "--vault-password-file={{ sops_vault_password_file }}"
+              - "--output={{ sops_key_file }}"
+              - "{{ _gnupg.path }}/sops.asc"
+          changed_when: true
+
+        - name: Publieke key in de environment-directory
+          ansible.builtin.copy:
+            src: "{{ _gnupg.path }}/sops.pub.asc"
+            dest: "{{ sops_pub_file }}"
+            mode: "0644"
+
+      always:
+        - name: Tijdelijke GNUPGHOME opruimen
+          ansible.builtin.file:
+            path: "{{ _gnupg.path }}"
+            state: absent
+          when: _gnupg.path is defined
+
+    - name: SOPS-key inlezen
+      ansible.builtin.set_fact:
+        _sops_key_asc: "{{ lookup('ansible.builtin.unvault', sops_key_file) }}"
+      no_log: true
+
+    - name: Fingerprint bepalen (uit de private key)
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        gpg --show-keys --with-colons
+        | awk -F: '$1 == "fpr" { print $10; exit }'
+      args:
+        executable: /bin/bash
+        stdin: "{{ _sops_key_asc }}"
+      register: _fpr
+      changed_when: false
+      failed_when: _fpr.rc != 0 or _fpr.stdout | trim | length == 0
+      no_log: true
+
+    - name: Fingerprint
+      ansible.builtin.set_fact:
+        _fingerprint: "{{ _fpr.stdout | trim }}"
+
+    - name: Staat de publieke key in de repo?
+      ansible.builtin.stat:
+        path: "{{ sops_pub_file }}"
+      register: _pub
+
+    # Bv. na een verse clone: publieke key opnieuw afleiden uit de private key
+    - name: Publieke key opnieuw aanmaken
+      when: not _pub.stat.exists
+      block:
+        - name: Tijdelijke GNUPGHOME
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: gnupg
+          register: _gnupg_pub
+
+        - name: Key importeren en publiek exporteren
+          ansible.builtin.shell: >-
+            gpg --batch --import &&
+            gpg --export --armor --output {{ sops_pub_file | quote }} {{ _fingerprint }}
+          args:
+            executable: /bin/bash
+            stdin: "{{ _sops_key_asc }}"
+          environment:
+            GNUPGHOME: "{{ _gnupg_pub.path }}"
+          changed_when: true
+          no_log: true
+
+      always:
+        - name: Tijdelijke GNUPGHOME opruimen
+          ansible.builtin.file:
+            path: "{{ _gnupg_pub.path }}"
+            state: absent
+          when: _gnupg_pub.path is defined
+
+    - name: .sops.yaml aanmaken (alleen als hij nog niet bestaat)
+      ansible.builtin.template:
+        src: sops.yaml.j2
+        dest: "{{ sops_config_file }}"
+        mode: "0644"
+        force: false
+
+    # --- Cluster -----------------------------------------------------------
+    - name: Namespace {{ sops_namespace }}
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ sops_namespace }}"
+
+    - name: SOPS-secret {{ sops_namespace }}/{{ sops_secret }}
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ sops_secret }}"
+            namespace: "{{ sops_namespace }}"
+          type: Opaque
+          # data i.p.v. stringData, anders is de taak nooit idempotent
+          data:
+            key.asc: "{{ _sops_key_asc | b64encode }}"
+      no_log: true
+
+    - name: Samenvatting
+      ansible.builtin.debug:
+        msg:
+          - "SOPS-key:     {{ sops_key_name }} ({{ _fingerprint }})"
+          - "Private key:  {{ sops_key_file }} (ansible-vault)"
+          - "Publieke key: {{ sops_pub_file }}"
+          - "sops-config:  {{ sops_config_file }}"
+          - "Secret:       {{ sops_namespace }}/{{ sops_secret }}"

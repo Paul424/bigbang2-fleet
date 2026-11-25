@@ -6,6 +6,9 @@ talos_vip: "{{ undef(hint='Zet talos_vip in group_vars/<cluster>.yml') }}"
 talos_endpoint_host: "api.{{ talos_cluster_name }}.{{ lab_domain }}"
 talos_endpoint: "https://{{ talos_endpoint_host }}:6443"
 talos_node_subnet: "{{ undef(hint='Zet talos_node_subnet in group_vars/<cluster>.yml') }}"
+# Pod- en service-CIDR per cluster, uniek over alle clusters (docs/IPAM.md)
+talos_pod_subnet: "{{ undef(hint='Zet talos_pod_subnet in group_vars/<cluster>.yml') }}"
+talos_service_subnet: "{{ undef(hint='Zet talos_service_subnet in group_vars/<cluster>.yml') }}"
 
 # Per node (host_vars of hosts.yml): controlplane | worker
 talos_role: controlplane

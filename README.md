@@ -26,7 +26,8 @@ Homelab on Proxmox (HP machines) with 4 Talos clusters and central policy manage
 - IP plan: see [docs/IPAM.md](docs/IPAM.md). Flat `192.168.48.0/22` LAN, no MAC reservations.
 - Flux (repo system-manifests): base/ + components/ + clusters/{mgmt,dev,siem,wrk01}.
   Mgmt rolls out to the other clusters via Kustomization spec.kubeConfig.secretRef.
-  Secrets with SOPS + age.
+  Secrets with SOPS + GPG (one key per cluster, private key in ansible-vault,
+  secret `env/sops-gpg` in the cluster).
 - system-manifests on GitHub, not only in our own GitLab, so it doesn't depend on the dev cluster.
 
 ## Order
@@ -90,7 +91,7 @@ dns1/dns2 (see [docs/DNS.md](docs/DNS.md)). Check it with:
 dig +short api.mgmt.bigbangfleet.lab    # -> 192.168.49.1
 ```
 
-### 3. mgmt cluster: VMs, Talos, Cilium
+### 3. mgmt cluster: VMs, Talos, Cilium, GitOps
 
 ```sh
 # Talos ISO to the Proxmox nodes + VMs (maintenance mode, IP via cloud-init)
@@ -98,6 +99,9 @@ ansible-playbook providers/ansible/infra-vms/playbooks/talos-vms.yml --limit 'pr
 
 # Machine configs, apply, bootstrap etcd, kubeconfig, Cilium
 ansible-playbook providers/ansible/infra-vms/playbooks/talos-cluster.yml -e talos_cluster=mgmt
+
+# SOPS key + namespace env + secret env/sops-gpg, then Flux (environments/mgmt/gitops)
+ansible-playbook providers/ansible/infra-vms/playbooks/bootstrap-cluster.yml -e talos_cluster=mgmt
 
 export TALOSCONFIG=$PWD/providers/ansible/infra-vms/files/talos/mgmt/talosconfig
 export KUBECONFIG=$PWD/providers/ansible/infra-vms/files/talos/mgmt/kubeconfig
@@ -115,6 +119,9 @@ ansible-playbook providers/ansible/infra-vms/playbooks/vms.yml --limit step-ca
 ### Useful partial runs
 
 ```sh
+# Only the SOPS key / only Flux
+ansible-playbook providers/ansible/infra-vms/playbooks/bootstrap-cluster.yml -e talos_cluster=mgmt --tags sops
+ansible-playbook providers/ansible/infra-vms/playbooks/bootstrap-cluster.yml -e talos_cluster=mgmt --tags gitops
 # Only the CNI
 ansible-playbook providers/ansible/infra-vms/playbooks/talos-cluster.yml -e talos_cluster=mgmt --tags cilium
 # New step-ca intermediate (see docs/CA.md)

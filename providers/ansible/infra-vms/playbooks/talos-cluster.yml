@@ -1,6 +1,7 @@
 ---
 # Genereert de Talos machine configs, past ze toe, bootstrapt etcd, haalt
 # talosconfig + kubeconfig op en installeert de CNI (Cilium).
+# Daarna: bootstrap-cluster.yml (SOPS-key + Flux).
 # Draait volledig op de controller.
 #   ansible-playbook providers/ansible/infra-vms/playbooks/talos-cluster.yml -e talos_cluster=mgmt
 #   ... --tags cilium     # alleen de CNI

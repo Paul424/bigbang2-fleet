@@ -21,6 +21,14 @@ nodeIP:
   validSubnets:
     - {{ talos_node_subnet }}
 ---
+# Unieke CIDR's per cluster; lijstvelden in dit document vervangen de default
+apiVersion: v1alpha1
+kind: KubeNetworkConfig
+podSubnets:
+  - {{ talos_pod_subnet }}
+serviceSubnets:
+  - {{ talos_service_subnet }}
+---
 apiVersion: v1alpha1
 kind: ResolverConfig
 nameservers:

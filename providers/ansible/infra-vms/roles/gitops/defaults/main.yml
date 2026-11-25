@@ -1,0 +1,7 @@
+---
+# Repo-root (playbooks/ -> infra-vms/ -> ansible/ -> providers/ -> root)
+gitops_repo_root: "{{ (playbook_dir ~ '/../../../..') | realpath }}"
+# Kustomization die wordt toegepast (Flux zelf + cluster-specifieke config)
+gitops_kustomization_dir: "{{ gitops_repo_root }}/environments/{{ talos_cluster_name }}/gitops"
+gitops_kubeconfig: "{{ playbook_dir }}/../files/talos/{{ talos_cluster_name }}/kubeconfig"
+gitops_flux_namespace: flux

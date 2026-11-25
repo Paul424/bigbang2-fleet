@@ -1,0 +1,20 @@
+---
+sops_kubeconfig: "{{ playbook_dir }}/../files/talos/{{ talos_cluster_name }}/kubeconfig"
+# Repo-root (playbooks/ -> infra-vms/ -> ansible/ -> providers/ -> root)
+sops_repo_root: "{{ (playbook_dir ~ '/../../../..') | realpath }}"
+sops_env_dir: "{{ sops_repo_root }}/environments/{{ talos_cluster_name }}"
+
+# Namespace met de SOPS-secret; Flux Kustomizations met decryption staan hier
+sops_namespace: env
+sops_secret: sops-gpg
+
+# GPG-key: ansible-vault versleuteld in git, wordt aangemaakt als hij ontbreekt
+sops_dir: "{{ playbook_dir }}/../files/sops/{{ talos_cluster_name }}"
+sops_key_file: "{{ sops_dir }}/sops.asc"
+sops_key_name: "flux-{{ talos_cluster_name }}.{{ lab_domain }}"
+sops_key_comment: "Flux SOPS key for the {{ talos_cluster_name }} cluster"
+# Publieke key + .sops.yaml naast de manifests (publiek, hoort in git)
+sops_pub_file: "{{ sops_env_dir }}/.sops.pub.asc"
+sops_config_file: "{{ sops_env_dir }}/.sops.yaml"
+
+sops_vault_password_file: "{{ lookup('ansible.builtin.config', 'DEFAULT_VAULT_PASSWORD_FILE') }}"

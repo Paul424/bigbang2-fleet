@@ -1,0 +1,18 @@
+---
+# Bootstrap van GitOps op een draaiend cluster (na talos-cluster.yml):
+#   1. sops:   SOPS GPG-key (eenmalig aangemaakt, ansible-vault versleuteld),
+#              publieke key + .sops.yaml in environments/<cluster>/,
+#              namespace env + secret env/sops-gpg
+#   2. gitops: kubectl apply -k environments/<cluster>/gitops (Flux)
+#
+#   ansible-playbook providers/ansible/infra-vms/playbooks/bootstrap-cluster.yml -e talos_cluster=mgmt
+#   ... --tags sops      # alleen de SOPS-key
+#   ... --tags gitops    # alleen Flux
+- name: Bootstrap cluster
+  hosts: "{{ talos_cluster | default('mgmt') }}"
+  gather_facts: false
+  roles:
+    - role: sops
+      tags: [sops]
+    - role: gitops
+      tags: [gitops]

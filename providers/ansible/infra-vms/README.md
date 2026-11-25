@@ -19,6 +19,8 @@ roles/
   talos_image/               # Talos nocloud ISO from the Image Factory to the nodes
   talos_cluster/             # Talos machine configs, apply, bootstrap, kubeconfig
   cilium/                    # CNI: Cilium (eBPF, kube-proxy replacement, L2 LB pool)
+  sops/                      # SOPS GPG key (ansible-vault), .sops.yaml, namespace env + secret
+  gitops/                    # kubectl apply -k environments/<cluster>/gitops (Flux)
 playbooks/
   pve-template.yml
   vms.yml
@@ -27,9 +29,12 @@ playbooks/
   dns.yml
   talos-vms.yml
   talos-cluster.yml
+  bootstrap-cluster.yml
 files/talos/<cluster>/
   secrets.yaml               # Talos cluster secrets, ansible-vault encrypted (commit it)
   talosconfig, kubeconfig    # admin credentials (gitignored)
+files/sops/<cluster>/
+  sops.asc                   # SOPS GPG private key, ansible-vault encrypted (commit it)
 files/pki/
   root_ca.crt                # fetched root certificate (public, commit it)
   root_ca_key                # fetched encrypted root key (gitignored!)
@@ -241,6 +246,39 @@ Cluster settings are in `inventory/group_vars/<cluster>.yml`
 (`talos_cluster_name`, `talos_vip`, `talos_node_subnet`,
 `talos_schedule_on_controlplanes`). The node role is `talos_role`
 (`controlplane` by default, set `worker` per host).
+
+## GitOps bootstrap (SOPS + Flux)
+
+```sh
+ansible-playbook providers/ansible/infra-vms/playbooks/bootstrap-cluster.yml -e talos_cluster=mgmt
+# only one of the two steps: --tags sops | --tags gitops
+```
+
+Runs after `talos-cluster.yml`, on the controller.
+
+1. **`sops`**:
+   - If `files/sops/<cluster>/sops.asc` doesn't exist, generates a GPG key
+     without a passphrase (RSA 4096, as Flux requires) in a temporary
+     `GNUPGHOME` and encrypts the private key with ansible-vault into that
+     file.
+   - Writes the public key to `environments/<cluster>/.sops.pub.asc`
+     (derived from the private key if it's missing, e.g. after a fresh clone).
+   - Creates `environments/<cluster>/.sops.yaml` with this key's fingerprint
+     if it doesn't exist yet (encrypts `data`/`stringData` in `*.sops.yaml`).
+   - Creates the namespace `env` and the secret `env/sops-gpg` (`key.asc`).
+     Flux Kustomizations that use `decryption.secretRef.name: sops-gpg` must
+     live in `env`.
+2. **`gitops`**: `kubectl diff`, then `kubectl apply --server-side -k
+   environments/<cluster>/gitops` if anything changed (retried, so CRDs and
+   resources using them can be in the same kustomization), and waits until
+   the controllers in `flux` are available.
+
+Commit `files/sops/<cluster>/sops.asc` (encrypted), `.sops.pub.asc` and
+`.sops.yaml`. To decrypt or edit SOPS files locally, import the key once:
+
+```sh
+ansible-vault view providers/ansible/infra-vms/files/sops/mgmt/sops.asc | gpg --import
+```
 
 ## Design choices
 

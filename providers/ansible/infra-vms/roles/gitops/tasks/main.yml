@@ -1,0 +1,59 @@
+---
+# Flux installeren: kubectl apply -k environments/<cluster>/gitops.
+# Draait één keer op de controller, na de rol sops.
+- name: GitOps op {{ talos_cluster_name }}
+  run_once: true
+  delegate_to: localhost
+  become: false
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ gitops_kubeconfig }}"
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ gitops_kubeconfig }}"
+  block:
+    - name: Kustomization moet bestaan
+      ansible.builtin.stat:
+        path: "{{ gitops_kustomization_dir }}/kustomization.yaml"
+      register: _kustomization
+
+    - name: Kustomization controleren
+      ansible.builtin.assert:
+        that: _kustomization.stat.exists
+        fail_msg: "Geen kustomization.yaml in {{ gitops_kustomization_dir }}"
+
+    # rc 0 = geen verschil, 1 = verschil, >1 = fout (bv. CRD's nog niet aanwezig)
+    - name: kubectl diff -k {{ gitops_kustomization_dir }}
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ gitops_kubeconfig }}", diff, --server-side, --force-conflicts, -k, "{{ gitops_kustomization_dir }}"]
+      register: _diff
+      changed_when: false
+      failed_when: false
+
+    # CRD's en resources die ze gebruiken kunnen in één kustomization zitten;
+    # bij de eerste apply zijn de CRD's dan nog niet established -> opnieuw proberen.
+    - name: kubectl apply -k {{ gitops_kustomization_dir }}
+      ansible.builtin.command:
+        argv: [kubectl, --kubeconfig, "{{ gitops_kubeconfig }}", apply, --server-side, --force-conflicts, -k, "{{ gitops_kustomization_dir }}"]
+      register: _apply
+      until: _apply.rc == 0
+      retries: 3
+      delay: 15
+      when: _diff.rc != 0
+      changed_when: true
+
+    - name: Wachten op de Flux-controllers
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        namespace: "{{ gitops_flux_namespace }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 300
+      register: _flux
+
+    - name: Samenvatting
+      ansible.builtin.debug:
+        msg:
+          - "Flux-controllers: {{ _flux.resources | map(attribute='metadata.name') | join(', ') }}"
+          - "Kustomization:    {{ gitops_kustomization_dir }}"
